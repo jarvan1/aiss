@@ -61,22 +61,26 @@ In the picker, type to fuzzy-filter (the provider name is part of each row, so
 typing `claude` narrows to Claude), use the arrow keys to move, watch the live
 preview pane on the right, and press Enter to resume.
 
-### Optional key binding
+### Key binding
 
 A binary can't, by itself, put a command on your shell's command line (this is
-exactly why `fzf` also ships shell snippets). If you want a hotkey, source the
-snippet for your shell — each binds **Ctrl-X Ctrl-W**:
+exactly why `fzf` also ships shell snippets). `aiss` carries the integration for
+each shell embedded inside it — source it from your rc with one line:
 
 ```sh
-source /path/to/aiss/shell/aiss.zsh    # zsh
-source /path/to/aiss/shell/aiss.bash   # bash  (add to ~/.bashrc)
-source /path/to/aiss/shell/aiss.fish   # fish  (or drop in ~/.config/fish/conf.d/)
+eval "$(aiss init zsh)"     # zsh   → ~/.zshrc
+eval "$(aiss init bash)"    # bash  → ~/.bashrc
+eval "$(aiss init fish)"    # fish  → ~/.config/fish/config.fish
 ```
 
-zsh and fish run the selected session immediately; bash places the resume
-command on the line for you to press Enter (readline's `bind -x` can't reliably
-auto-accept — the same reason fzf's Ctrl-R behaves this way). Override the key
-with `AISS_KEYBIND` (zsh), `AISS_KEYBIND_BASH`, or `AISS_KEYBIND_FISH`.
+All three bind **Ctrl-X Ctrl-W**. zsh and fish run the selected session
+immediately; bash places the resume command on the line for you to press Enter
+(readline's `bind -x` can't reliably auto-accept — the same reason fzf's Ctrl-R
+behaves this way). Override the key with `AISS_KEYBIND` (zsh),
+`AISS_KEYBIND_BASH`, or `AISS_KEYBIND_FISH`.
+
+(Working from a source checkout instead? The same snippets live in `shell/` and
+can be `source`d directly.)
 
 Without any of these, just run `aiss` — it resumes the session directly.
 
