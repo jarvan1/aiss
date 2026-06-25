@@ -22,6 +22,7 @@ func Pick(sessions []Session, query string) (Session, bool) {
 		sessions,
 		func(i int) string { return rowLabel(sessions[i]) },
 		fuzzyfinder.WithQuery(query),
+		fuzzyfinder.WithCursorPosition(fuzzyfinder.CursorPositionTop),
 		fuzzyfinder.WithPreviewWindow(func(i, _, _ int) string {
 			if i < 0 {
 				return ""
