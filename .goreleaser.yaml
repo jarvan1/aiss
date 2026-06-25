@@ -29,6 +29,28 @@ archives:
       - src: shell/*
         dst: shell
 
+homebrew_casks:
+  - name: aiss
+    repository:
+      owner: jarvan1
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/jarvan1/aiss"
+    description: "Fuzzy picker over AI CLI session histories (Claude Code / Codex / Copilot / Gemini)"
+    # The released binaries are unsigned; strip the Gatekeeper quarantine flag on
+    # install so macOS doesn't block them.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/aiss"]
+          end
+    caveats: |
+      To enable the Ctrl-X Ctrl-W key binding, add one line to your shell rc:
+        eval "$(aiss init zsh)"     # or: aiss init bash | aiss init fish
+
 checksum:
   name_template: checksums.txt
 

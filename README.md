@@ -22,6 +22,12 @@ I want to build a zsh plugin that searches AI CLI session history…
 
 ## Install
 
+**Homebrew** (macOS / Linux):
+
+```sh
+brew install jarvan1/tap/aiss
+```
+
 **Pre-built binary** (no toolchain needed) — grab the archive for your OS/arch
 from the [latest release](https://github.com/jarvan1/aiss/releases/latest),
 unpack it, and put `aiss` on your `PATH`. Each release is built automatically by
