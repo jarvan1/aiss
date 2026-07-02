@@ -222,7 +222,7 @@ func (m *picker) View() string {
 	// --- preview (right) ---
 	var prev string
 	if len(m.filtered) > 0 {
-		prev = Preview(m.sessions[m.filtered[m.cursor]])
+		prev = Preview(m.sessions[m.filtered[m.cursor]], rightW)
 	}
 	plines := strings.Split(prev, "\n")
 	if len(plines) > body {

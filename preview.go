@@ -6,6 +6,9 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
+	"github.com/muesli/reflow/truncate"
 )
 
 // ANSI helpers.
@@ -37,10 +40,11 @@ type turn struct {
 }
 
 // Preview returns the full preview text (header + transcript) for a session.
-func Preview(s Session) string {
+// width is the column budget for the header box rules; <=0 uses a default.
+func Preview(s Session, width int) string {
 	m, turns := readTranscript(s)
 	var b strings.Builder
-	b.WriteString(renderHeader(m))
+	b.WriteString(renderHeader(m, width))
 	for _, t := range turns {
 		label := cUser + "▶ USER" + cReset
 		if t.role == "assistant" {
@@ -51,23 +55,71 @@ func Preview(s Session) string {
 	return b.String()
 }
 
-func renderHeader(m meta) string {
+func renderHeader(m meta, width int) string {
 	cwd := tilde(m.cwd)
 	d0, d1, dur := timeRange(m.t0, m.t1)
-	branch := ""
+
+	// Total box width, capped so a tiny pane doesn't produce negative padding.
+	w := width
+	if w < 10 {
+		w = 44
+	}
+	inner := w - 2 // columns between the left "│" and right "│"
+
+	// boxRow draws "│ <styled> <pad>│", padding by the *display* width of the
+	// plain text so ANSI codes and wide runes (emoji, ·) don't skew alignment.
+	// Content wider than the row is truncated so the right border always shows.
+	boxRow := func(styled, plain string) string {
+		avail := inner - 1 // 1 leading space
+		if runewidth.StringWidth(plain) > avail {
+			styled = truncate.String(styled, uint(avail))
+			plain = truncate.String(plain, uint(avail))
+		}
+		pad := avail - runewidth.StringWidth(plain)
+		if pad < 0 {
+			pad = 0
+		}
+		return fmt.Sprintf("%s│%s %s%s%s│%s\n", cCyan, cReset, styled, strings.Repeat(" ", pad), cCyan, cReset)
+	}
+
+	// Title lives on the top border: ╭─ provider · model ──…──╮
+	titlePlain := fmt.Sprintf("─ %s · %s ", m.provider, m.model)
+	titleStyled := fmt.Sprintf("─ %s%s%s%s · %s ", cBold, m.provider, cReset, cCyan, m.model)
+	if runewidth.StringWidth(titlePlain) > inner {
+		titleStyled = truncate.String(titleStyled, uint(inner))
+		titlePlain = truncate.String(titlePlain, uint(inner))
+	}
+	topFill := inner - runewidth.StringWidth(titlePlain)
+	if topFill < 0 {
+		topFill = 0
+	}
+
+	// 📁 cwd (+ branch)
+	cwdPlain := "📁 " + cwd
+	cwdStyled := "📁 " + cwd
 	if m.branch != "" && m.branch != "HEAD" {
-		branch = fmt.Sprintf("  %s⎇ %s%s", cDim, m.branch, cReset)
+		cwdPlain += "  ⎇ " + m.branch
+		cwdStyled += fmt.Sprintf("  %s⎇ %s%s", cDim, m.branch, cReset)
 	}
-	ver := ""
+
+	// 🕐 time range
+	timePlain := fmt.Sprintf("🕐 %s → %s  (%s)", d0, d1, dur)
+	timeStyled := fmt.Sprintf("🕐 %s → %s  %s(%s)%s", d0, d1, cDim, dur, cReset)
+
+	// 💬 counts (+ version)
+	msgPlain := fmt.Sprintf("💬 %d user · %d assistant", m.nUser, m.nAsst)
+	msgStyled := msgPlain
 	if m.verLine != "" {
-		ver = fmt.Sprintf("   %s%s%s", cDim, m.verLine, cReset)
+		msgPlain += "   " + m.verLine
+		msgStyled += fmt.Sprintf("   %s%s%s", cDim, m.verLine, cReset)
 	}
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s╭─ %s%s%s%s · %s%s\n", cCyan, cBold, m.provider, cReset, cCyan, m.model, cReset)
-	fmt.Fprintf(&b, "%s│%s 📁 %s%s\n", cCyan, cReset, cwd, branch)
-	fmt.Fprintf(&b, "%s│%s 🕐 %s → %s  %s(%s)%s\n", cCyan, cReset, d0, d1, cDim, dur, cReset)
-	fmt.Fprintf(&b, "%s│%s 💬 %d user · %d assistant%s\n", cCyan, cReset, m.nUser, m.nAsst, ver)
-	fmt.Fprintf(&b, "%s╰──────────────────────────────────────────%s\n\n", cCyan, cReset)
+	fmt.Fprintf(&b, "%s╭%s%s%s╮%s\n", cCyan, titleStyled, cCyan, strings.Repeat("─", topFill), cReset)
+	b.WriteString(boxRow(cwdStyled, cwdPlain))
+	b.WriteString(boxRow(timeStyled, timePlain))
+	b.WriteString(boxRow(msgStyled, msgPlain))
+	fmt.Fprintf(&b, "%s╰%s╯%s\n\n", cCyan, strings.Repeat("─", inner), cReset)
 	return b.String()
 }
 

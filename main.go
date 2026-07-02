@@ -13,10 +13,20 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/mattn/go-runewidth"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=…".
 var version = "dev"
+
+func init() {
+	// Box-drawing (─ │ ╭ ╮) and symbols like · → ⎇ are East-Asian *ambiguous*
+	// width: under a CJK locale go-runewidth counts them as 2 cells, but the
+	// terminal renders them as 1. That mismatch made lipgloss/truncate chop the
+	// preview box's right border. Force narrow so measurement matches the screen.
+	runewidth.DefaultCondition.EastAsianWidth = false
+}
 
 func main() {
 	args := os.Args[1:]
@@ -102,7 +112,7 @@ func cmdPreview(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: aiss preview <provider> <file>")
 		os.Exit(2)
 	}
-	fmt.Print(Preview(Session{Provider: args[0], File: args[1]}))
+	fmt.Print(Preview(Session{Provider: args[0], File: args[1]}, 0))
 }
 
 const usage = `aiss — fuzzy picker over AI CLI session histories

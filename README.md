@@ -10,11 +10,11 @@ what the [zsh-plugin version](../ai-session-search) depends on; this reimplement
 the scanner and the picker natively.)
 
 ```
-╭─ claude · claude-opus-4-8
-│ 📁 ~/plugins
-│ 🕐 2026-06-22 09:39 → 06-25 01:16  (2d15h)
-│ 💬 248 user · 507 assistant   Claude Code 2.1.170
-╰──────────────────────────────────────────
+╭─ claude · claude-opus-4-8 ────────────────╮
+│ 📁 ~/plugins                              │
+│ 🕐 2026-06-22 09:39 → 06-25 01:16  (2d15h) │
+│ 💬 248 user · 507 assistant   Claude Code 2.1.170 │
+╰────────────────────────────────────────────╯
 
 ▶ USER
 I want to build a zsh plugin that searches AI CLI session history…
