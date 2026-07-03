@@ -50,6 +50,8 @@ homebrew_casks:
     caveats: |
       To enable the Ctrl-X Ctrl-W key binding, add one line to your shell rc:
         eval "$(aiss init zsh)"     # or: aiss init bash | aiss init fish
+      On Windows (PowerShell), add to your $PROFILE instead:
+        Invoke-Expression (& aiss init powershell | Out-String)
 
 checksum:
   name_template: checksums.txt

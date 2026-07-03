@@ -84,6 +84,25 @@ func (p resumePlan) Shell() string {
 	return "( " + cmd + " )"
 }
 
+// PowerShell renders the plan for PowerShell (--print --pwsh). PowerShell has no
+// `( cd … && … )` subshell, so we Push-Location, run, then Pop-Location in a
+// finally block so the caller's directory is always restored.
+func (p resumePlan) PowerShell() string {
+	var b strings.Builder
+	b.WriteString("Push-Location " + pwshQuote(p.dir) + "; try { & " + pwshQuote(p.name))
+	for _, a := range p.args {
+		b.WriteString(" " + pwshQuote(a))
+	}
+	b.WriteString(" } finally { Pop-Location }")
+	return b.String()
+}
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// pwshQuote single-quotes a string for PowerShell, where an embedded single
+// quote is escaped by doubling it.
+func pwshQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }

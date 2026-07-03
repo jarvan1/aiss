@@ -53,11 +53,15 @@ func main() {
 	}
 
 	printOnly := false
+	pwsh := false
 	var query string
 	for _, a := range args {
 		switch a {
 		case "--print", "-p":
 			printOnly = true
+		case "--pwsh":
+			// emit PowerShell syntax for --print (used by the pwsh widget)
+			pwsh = true
 		case "--":
 			// argument separator (used by the shell widget); ignore
 		default:
@@ -85,7 +89,11 @@ func main() {
 	}
 
 	if printOnly {
-		fmt.Println(plan.Shell())
+		if pwsh {
+			fmt.Println(plan.PowerShell())
+		} else {
+			fmt.Println(plan.Shell())
+		}
 		return
 	}
 	if plan.note != "" {
@@ -119,7 +127,7 @@ const usage = `aiss — fuzzy picker over AI CLI session histories
 
   aiss [query]              pick a session and resume it in its original dir
   aiss --print [query]      print the resume command instead of running it
-  aiss init <shell>         print shell integration for zsh|bash|fish
+  aiss init <shell>         print shell integration for zsh|bash|fish|powershell
   aiss scan                 list sessions (provider, id, cwd, preview, file)
   aiss preview <prov> <f>   render one session's preview
 
