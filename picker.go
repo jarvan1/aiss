@@ -256,15 +256,16 @@ func Pick(sessions []Session, query string) (Session, bool) {
 	}
 	m.refilter()
 
-	// Render the TUI directly on the controlling terminal (/dev/tty), like fzf
-	// does. This is essential for the shell widget, which runs us as
-	// `cmd=$(aiss --print ... 2>/dev/null)`: stdout is a pipe and stderr is
-	// discarded, so a TUI on either would be invisible. Falls back to stderr
-	// where /dev/tty isn't available (e.g. Windows).
+	// Render the TUI directly on the controlling terminal, like fzf does. This
+	// is essential for the shell/pwsh widgets, which run us with stdout captured
+	// (`cmd=$(aiss --print ...)` / `$cmd = & aiss --print --pwsh`): a TUI on
+	// stdout would be invisible and, on Windows, the inherited stdin carries no
+	// key events. openConsole grabs /dev/tty (POSIX) or CONIN$/CONOUT$ (Windows);
+	// both input and output must go there. Falls back to stderr if unavailable.
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
-	if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
-		defer tty.Close()
-		opts = append(opts, tea.WithInput(tty), tea.WithOutput(tty))
+	if in, out, closeConsole, ok := openConsole(); ok {
+		defer closeConsole()
+		opts = append(opts, tea.WithInput(in), tea.WithOutput(out))
 	} else {
 		opts = append(opts, tea.WithOutput(os.Stderr))
 	}
