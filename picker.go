@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 	"github.com/muesli/reflow/truncate"
 )
 
@@ -35,10 +37,44 @@ type picker struct {
 	offset   int // first visible row (scroll)
 	width    int
 	height   int
-	chosen   int // index into sessions; -1 = aborted
+	chosen   int     // index into sessions; -1 = aborted
+	pollFd   uintptr // output fd to poll for size (Windows); 0 disables polling
+	pollOn   bool    // whether size polling is active
 }
 
-func (m *picker) Init() tea.Cmd { return textinput.Blink }
+// resizeTickMsg drives the Windows size poller (see startPolling).
+type resizeTickMsg struct{}
+
+const resizePollInterval = 120 * time.Millisecond
+
+func (m *picker) Init() tea.Cmd {
+	if m.pollOn {
+		// Prime the size immediately so the first paint is correctly sized even
+		// on paths where bubbletea sends no initial WindowSizeMsg, then start the
+		// tick loop.
+		return tea.Batch(textinput.Blink, m.pollSize(), tea.Tick(resizePollInterval, func(time.Time) tea.Msg {
+			return resizeTickMsg{}
+		}))
+	}
+	return textinput.Blink
+}
+
+// pollSize reads the current terminal size from pollFd and, if it changed,
+// feeds a WindowSizeMsg — the same message a native resize would send. On
+// Windows the picker often runs on a console handle (CONIN$/CONOUT$) that
+// bubbletea can't deliver resize events for, so we poll instead.
+func (m *picker) pollSize() tea.Cmd {
+	return func() tea.Msg {
+		w, h, err := term.GetSize(m.pollFd)
+		if err != nil || w <= 0 || h <= 0 {
+			return nil
+		}
+		if w == m.width && h == m.height {
+			return nil
+		}
+		return tea.WindowSizeMsg{Width: w, Height: h}
+	}
+}
 
 func (m *picker) bodyHeight() int {
 	if m.height <= 1 {
@@ -151,6 +187,12 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.fixScroll()
 		return m, nil
+	case resizeTickMsg:
+		// Poll the size and re-arm the tick. pollSize only emits a
+		// WindowSizeMsg when the size actually changed, so idle ticks are cheap.
+		return m, tea.Batch(m.pollSize(), tea.Tick(resizePollInterval, func(time.Time) tea.Msg {
+			return resizeTickMsg{}
+		}))
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
@@ -266,8 +308,18 @@ func Pick(sessions []Session, query string) (Session, bool) {
 	if in, out, closeConsole, ok := openConsole(); ok {
 		defer closeConsole()
 		opts = append(opts, tea.WithInput(in), tea.WithOutput(out))
+		// On Windows the picker often draws on a console handle bubbletea can't
+		// deliver resize events for, so it polls the output size instead (no-op
+		// on POSIX, which gets native resize events). enablePolling is true only
+		// on Windows and only when out is a real terminal.
+		if enablePolling && term.IsTerminal(out.Fd()) {
+			m.pollFd, m.pollOn = out.Fd(), true
+		}
 	} else {
 		opts = append(opts, tea.WithOutput(os.Stderr))
+		if enablePolling && term.IsTerminal(os.Stderr.Fd()) {
+			m.pollFd, m.pollOn = os.Stderr.Fd(), true
+		}
 	}
 
 	res, err := tea.NewProgram(m, opts...).Run()
