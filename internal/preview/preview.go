@@ -1,4 +1,6 @@
-package main
+// Package preview renders a session's transcript (header box + conversation
+// turns) for the picker's live preview pane.
+package preview
 
 import (
 	"encoding/json"
@@ -7,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jarvan1/aiss/internal/session"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/reflow/truncate"
 )
@@ -41,7 +44,7 @@ type turn struct {
 
 // Preview returns the full preview text (header + transcript) for a session.
 // width is the column budget for the header box rules; <=0 uses a default.
-func Preview(s Session, width int) string {
+func Preview(s session.Session, width int) string {
 	m, turns := readTranscript(s)
 	var b strings.Builder
 	b.WriteString(renderHeader(m, width))
@@ -56,7 +59,7 @@ func Preview(s Session, width int) string {
 }
 
 func renderHeader(m meta, width int) string {
-	cwd := tilde(m.cwd)
+	cwd := session.Tilde(m.cwd)
 	d0, d1, dur := timeRange(m.t0, m.t1)
 
 	// Total box width, capped so a tiny pane doesn't produce negative padding.
@@ -154,7 +157,7 @@ func timeRange(t0, t1 time.Time) (string, string, string) {
 }
 
 // readTranscript parses a session file into header meta + ordered turns.
-func readTranscript(s Session) (meta, []turn) {
+func readTranscript(s session.Session) (meta, []turn) {
 	switch s.Provider {
 	case "claude":
 		return readClaude(s.File)
@@ -182,12 +185,12 @@ func readClaude(file string) (meta, []turn) {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
 	}
-	eachLine(file, func(raw []byte) bool {
+	session.EachLine(file, func(raw []byte) bool {
 		var l line
 		if json.Unmarshal(raw, &l) != nil {
 			return true
 		}
-		if ts := parseTime(l.Timestamp); !ts.IsZero() {
+		if ts := session.ParseTime(l.Timestamp); !ts.IsZero() {
 			if m.t0.IsZero() {
 				m.t0 = ts
 			}
@@ -202,7 +205,7 @@ func readClaude(file string) (meta, []turn) {
 		if m.branch == "" && l.GitBranch != "" {
 			m.branch = l.GitBranch
 		}
-		if m.model == "" && l.Type == "assistant" && l.Message.Model != "" && !reAngle.MatchString(l.Message.Model) {
+		if m.model == "" && l.Type == "assistant" && l.Message.Model != "" && !session.ReAngle.MatchString(l.Message.Model) {
 			m.model = l.Message.Model
 		}
 		switch l.Type {
@@ -279,12 +282,12 @@ func readCodex(file string) (meta, []turn) {
 			} `json:"content"`
 		} `json:"payload"`
 	}
-	eachLine(file, func(raw []byte) bool {
+	session.EachLine(file, func(raw []byte) bool {
 		var l line
 		if json.Unmarshal(raw, &l) != nil {
 			return true
 		}
-		if ts := parseTime(l.Timestamp); !ts.IsZero() {
+		if ts := session.ParseTime(l.Timestamp); !ts.IsZero() {
 			if m.t0.IsZero() {
 				m.t0 = ts
 			}
@@ -315,7 +318,7 @@ func readCodex(file string) (meta, []turn) {
 			switch l.Payload.Role {
 			case "user":
 				m.nUser++
-				if text != "" && !reCodexInjected.MatchString(text) {
+				if text != "" && !session.ReCodexInjected.MatchString(text) {
 					turns = append(turns, turn{"user", text})
 				}
 			case "assistant":
@@ -352,12 +355,12 @@ func readCopilot(file string) (meta, []turn) {
 			} `json:"toolRequests"`
 		} `json:"data"`
 	}
-	eachLine(file, func(raw []byte) bool {
+	session.EachLine(file, func(raw []byte) bool {
 		var l line
 		if json.Unmarshal(raw, &l) != nil {
 			return true
 		}
-		if ts := parseTime(l.Timestamp); !ts.IsZero() {
+		if ts := session.ParseTime(l.Timestamp); !ts.IsZero() {
 			if m.t0.IsZero() {
 				m.t0 = ts
 			}

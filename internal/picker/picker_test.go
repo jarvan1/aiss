@@ -1,6 +1,10 @@
-package main
+package picker
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jarvan1/aiss/internal/session"
+)
 
 func TestMatchProvider(t *testing.T) {
 	cases := map[string]string{
@@ -8,9 +12,9 @@ func TestMatchProvider(t *testing.T) {
 		"codex":   "codex",
 		"cla":     "claude", // unambiguous prefix
 		"gem":     "gemini",
-		"co":      "",       // ambiguous (codex/copilot) → not a provider term
-		"c":       "",       // ambiguous
-		"binance": "",       // not a provider
+		"co":      "", // ambiguous (codex/copilot) → not a provider term
+		"c":       "", // ambiguous
+		"binance": "", // not a provider
 	}
 	for term, want := range cases {
 		got, _ := matchProvider(term)
@@ -21,7 +25,7 @@ func TestMatchProvider(t *testing.T) {
 }
 
 func newTestPicker() *picker {
-	sessions := []Session{
+	sessions := []session.Session{
 		{Provider: "claude", Cwd: "/p/binance", Preview: "add an indicator"},
 		{Provider: "codex", Cwd: "/p/multica", Preview: "继续完成 claude 没完成的任务"}, // mentions "claude"
 		{Provider: "codex", Cwd: "/p/binance", Preview: "fix the upload step"},

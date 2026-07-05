@@ -14,6 +14,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jarvan1/aiss/internal/picker"
+	"github.com/jarvan1/aiss/internal/preview"
+	"github.com/jarvan1/aiss/internal/resume"
+	"github.com/jarvan1/aiss/internal/scan"
+	"github.com/jarvan1/aiss/internal/session"
+	"github.com/jarvan1/aiss/internal/shellinit"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -71,18 +77,18 @@ func main() {
 		}
 	}
 
-	sessions := Scan(defaultDirs(), showMissing())
+	sessions := scan.Scan(session.DefaultDirs(), session.ShowMissing())
 	if len(sessions) == 0 {
 		fmt.Fprintln(os.Stderr, "aiss: no AI CLI sessions found.")
 		os.Exit(1)
 	}
 
-	s, ok := Pick(sessions, query)
+	s, ok := picker.Pick(sessions, query)
 	if !ok {
 		return // user aborted
 	}
 
-	plan, err := planResume(s)
+	plan, err := resume.PlanResume(s)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "aiss:", err)
 		os.Exit(1)
@@ -96,8 +102,8 @@ func main() {
 		}
 		return
 	}
-	if plan.note != "" {
-		fmt.Fprintln(os.Stderr, "aiss:", plan.note)
+	if plan.Note() != "" {
+		fmt.Fprintln(os.Stderr, "aiss:", plan.Note())
 	}
 	if err := plan.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "aiss:", err)
@@ -105,13 +111,27 @@ func main() {
 	}
 }
 
+// cmdInit prints the shell integration snippet for the requested shell.
+func cmdInit(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: aiss init <zsh|bash|fish|powershell>")
+		os.Exit(2)
+	}
+	snippet, ok := shellinit.Snippet(args[0])
+	if !ok {
+		fmt.Fprintf(os.Stderr, "aiss: unsupported shell %q (use zsh, bash, fish, or powershell)\n", args[0])
+		os.Exit(2)
+	}
+	fmt.Print(snippet)
+}
+
 func cmdScan() {
-	for _, s := range Scan(defaultDirs(), showMissing()) {
-		preview := s.Preview
-		if preview == "" {
-			preview = "(no prompt)"
+	for _, s := range scan.Scan(session.DefaultDirs(), session.ShowMissing()) {
+		prev := s.Preview
+		if prev == "" {
+			prev = "(no prompt)"
 		}
-		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", s.Provider, s.ID, tilde(s.Cwd), truncRunes(preview, 100), s.File)
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", s.Provider, s.ID, session.Tilde(s.Cwd), session.TruncRunes(prev, 100), s.File)
 	}
 }
 
@@ -120,7 +140,7 @@ func cmdPreview(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: aiss preview <provider> <file>")
 		os.Exit(2)
 	}
-	fmt.Print(Preview(Session{Provider: args[0], File: args[1]}, 0))
+	fmt.Print(preview.Preview(session.Session{Provider: args[0], File: args[1]}, 0))
 }
 
 const usage = `aiss — fuzzy picker over AI CLI session histories
