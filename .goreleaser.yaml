@@ -9,7 +9,8 @@ before:
     - go mod tidy
 
 builds:
-  - env:
+  - main: ./cmd/aiss
+    env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
@@ -26,7 +27,7 @@ archives:
     files:
       - README.md
       - LICENSE
-      - src: shell/*
+      - src: internal/shellinit/aiss.*
         dst: shell
 
 homebrew_casks:

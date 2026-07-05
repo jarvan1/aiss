@@ -36,7 +36,7 @@ GitHub Actions for macOS / Linux / Windows (amd64 + arm64).
 **With Go:**
 
 ```sh
-go install github.com/jarvan1/aiss@latest        # needs Go 1.21+
+go install github.com/jarvan1/aiss/cmd/aiss@latest   # needs Go 1.21+
 ```
 
 **Enable the hotkey** (optional) — add one line to your shell rc:
@@ -89,8 +89,8 @@ Enter (readline's `bind -x` can't reliably auto-accept — the same reason fzf's
 Ctrl-R behaves this way). Override the key with `AISS_KEYBIND` (zsh),
 `AISS_KEYBIND_BASH`, `AISS_KEYBIND_FISH`, or `AISS_KEYBIND_PWSH`.
 
-(Working from a source checkout instead? The same snippets live in `shell/` and
-can be `source`d directly.)
+(Working from a source checkout instead? The same snippets live in
+`internal/shellinit/` and can be `source`d directly.)
 
 Without any of these, just run `aiss` — it resumes the session directly.
 
@@ -127,9 +127,9 @@ Sessions whose original directory no longer exists are hidden — set
 ## Cross-platform builds
 
 ```sh
-GOOS=linux   GOARCH=amd64 go build -o dist/aiss-linux-amd64 .
-GOOS=darwin  GOARCH=arm64 go build -o dist/aiss-darwin-arm64 .
-GOOS=windows GOARCH=amd64 go build -o dist/aiss-windows-amd64.exe .
+GOOS=linux   GOARCH=amd64 go build -o dist/aiss-linux-amd64 ./cmd/aiss
+GOOS=darwin  GOARCH=arm64 go build -o dist/aiss-darwin-arm64 ./cmd/aiss
+GOOS=windows GOARCH=amd64 go build -o dist/aiss-windows-amd64.exe ./cmd/aiss
 ```
 
 The picker (via `tcell`) works on Windows terminals too.

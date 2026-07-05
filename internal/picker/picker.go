@@ -1,33 +1,38 @@
-package main
+// Package picker is a top-anchored fuzzy finder over discovered sessions, with
+// a live preview pane. It's a small bubbletea model so the layout is controlled
+// precisely — off-the-shelf finders either hardcode the input at the bottom or
+// mis-render the preview pane.
+package picker
 
 import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
+	"github.com/jarvan1/aiss/internal/preview"
+	"github.com/jarvan1/aiss/internal/session"
 	"github.com/muesli/reflow/truncate"
 )
 
 // rowLabel is the single-line list entry: provider, cwd, preview.
-func rowLabel(s Session) string {
-	preview := s.Preview
-	if preview == "" {
-		preview = "(no prompt)"
+func rowLabel(s session.Session) string {
+	prev := s.Preview
+	if prev == "" {
+		prev = "(no prompt)"
 	}
-	return fmt.Sprintf("%-7s %-34.34s %s", s.Provider, tilde(s.Cwd), preview)
+	return fmt.Sprintf("%-7s %-34.34s %s", s.Provider, session.Tilde(s.Cwd), prev)
 }
 
 var cursorStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
 
-// picker is a top-anchored fuzzy finder (input on top, list left, live preview
-// right). It's a small bubbletea model so we control the layout precisely —
-// off-the-shelf finders either hardcode the input at the bottom or mis-render
-// the preview pane.
+// picker is the bubbletea model backing Pick.
 type picker struct {
-	sessions []Session
+	sessions []session.Session
 	targets  []string // rowLabel per session, used for both search and display
 	filtered []int    // indices into sessions, in match order
 	input    textinput.Model
@@ -35,10 +40,44 @@ type picker struct {
 	offset   int // first visible row (scroll)
 	width    int
 	height   int
-	chosen   int // index into sessions; -1 = aborted
+	chosen   int     // index into sessions; -1 = aborted
+	pollFd   uintptr // output fd to poll for size (Windows); 0 disables polling
+	pollOn   bool    // whether size polling is active
 }
 
-func (m *picker) Init() tea.Cmd { return textinput.Blink }
+// resizeTickMsg drives the Windows size poller (see Init).
+type resizeTickMsg struct{}
+
+const resizePollInterval = 120 * time.Millisecond
+
+func (m *picker) Init() tea.Cmd {
+	if m.pollOn {
+		// Prime the size immediately so the first paint is correctly sized even
+		// on paths where bubbletea sends no initial WindowSizeMsg, then start the
+		// tick loop.
+		return tea.Batch(textinput.Blink, m.pollSize(), tea.Tick(resizePollInterval, func(time.Time) tea.Msg {
+			return resizeTickMsg{}
+		}))
+	}
+	return textinput.Blink
+}
+
+// pollSize reads the current terminal size from pollFd and, if it changed,
+// feeds a WindowSizeMsg — the same message a native resize would send. On
+// Windows the picker often runs on a console handle (CONIN$/CONOUT$) that
+// bubbletea can't deliver resize events for, so we poll instead.
+func (m *picker) pollSize() tea.Cmd {
+	return func() tea.Msg {
+		w, h, err := term.GetSize(m.pollFd)
+		if err != nil || w <= 0 || h <= 0 {
+			return nil
+		}
+		if w == m.width && h == m.height {
+			return nil
+		}
+		return tea.WindowSizeMsg{Width: w, Height: h}
+	}
+}
 
 func (m *picker) bodyHeight() int {
 	if m.height <= 1 {
@@ -151,6 +190,12 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.fixScroll()
 		return m, nil
+	case resizeTickMsg:
+		// Poll the size and re-arm the tick. pollSize only emits a
+		// WindowSizeMsg when the size actually changed, so idle ticks are cheap.
+		return m, tea.Batch(m.pollSize(), tea.Tick(resizePollInterval, func(time.Time) tea.Msg {
+			return resizeTickMsg{}
+		}))
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
@@ -222,7 +267,7 @@ func (m *picker) View() string {
 	// --- preview (right) ---
 	var prev string
 	if len(m.filtered) > 0 {
-		prev = Preview(m.sessions[m.filtered[m.cursor]], rightW)
+		prev = preview.Preview(m.sessions[m.filtered[m.cursor]], rightW)
 	}
 	plines := strings.Split(prev, "\n")
 	if len(plines) > body {
@@ -242,7 +287,7 @@ func (m *picker) View() string {
 
 // Pick shows the interactive fuzzy finder and returns the chosen session. The
 // bool is false if the user aborted (Esc/Ctrl-C) or nothing matched.
-func Pick(sessions []Session, query string) (Session, bool) {
+func Pick(sessions []session.Session, query string) (session.Session, bool) {
 	ti := textinput.New()
 	ti.Prompt = "ai-sessions ❯ "
 	ti.SetValue(query)
@@ -266,17 +311,27 @@ func Pick(sessions []Session, query string) (Session, bool) {
 	if in, out, closeConsole, ok := openConsole(); ok {
 		defer closeConsole()
 		opts = append(opts, tea.WithInput(in), tea.WithOutput(out))
+		// On Windows the picker often draws on a console handle bubbletea can't
+		// deliver resize events for, so it polls the output size instead (no-op
+		// on POSIX, which gets native resize events). enablePolling is true only
+		// on Windows and only when out is a real terminal.
+		if enablePolling && term.IsTerminal(out.Fd()) {
+			m.pollFd, m.pollOn = out.Fd(), true
+		}
 	} else {
 		opts = append(opts, tea.WithOutput(os.Stderr))
+		if enablePolling && term.IsTerminal(os.Stderr.Fd()) {
+			m.pollFd, m.pollOn = os.Stderr.Fd(), true
+		}
 	}
 
 	res, err := tea.NewProgram(m, opts...).Run()
 	if err != nil {
-		return Session{}, false
+		return session.Session{}, false
 	}
 	fm := res.(*picker)
 	if fm.chosen < 0 {
-		return Session{}, false
+		return session.Session{}, false
 	}
 	return sessions[fm.chosen], true
 }

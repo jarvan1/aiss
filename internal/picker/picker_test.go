@@ -1,6 +1,10 @@
-package main
+package picker
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jarvan1/aiss/internal/session"
+)
 
 func TestMatchProvider(t *testing.T) {
 	cases := map[string]string{
@@ -8,9 +12,9 @@ func TestMatchProvider(t *testing.T) {
 		"codex":   "codex",
 		"cla":     "claude", // unambiguous prefix
 		"gem":     "gemini",
-		"co":      "",       // ambiguous (codex/copilot) → not a provider term
-		"c":       "",       // ambiguous
-		"binance": "",       // not a provider
+		"co":      "", // ambiguous (codex/copilot) → not a provider term
+		"c":       "", // ambiguous
+		"binance": "", // not a provider
 	}
 	for term, want := range cases {
 		got, _ := matchProvider(term)
@@ -21,11 +25,11 @@ func TestMatchProvider(t *testing.T) {
 }
 
 func newTestPicker() *picker {
-	sessions := []Session{
-		{Provider: "claude", Cwd: "/p/binance", Preview: "add an indicator"},
-		{Provider: "codex", Cwd: "/p/multica", Preview: "继续完成 claude 没完成的任务"}, // mentions "claude"
-		{Provider: "codex", Cwd: "/p/binance", Preview: "fix the upload step"},
-		{Provider: "copilot", Cwd: "/p/xsh", Preview: "运行微信报错"},
+	sessions := []session.Session{
+		{Provider: "claude", Cwd: "/p/test", Preview: "add an indicator"},
+		{Provider: "codex", Cwd: "/p/demo", Preview: "继续完成 claude 没完成的任务"}, // mentions "claude"
+		{Provider: "codex", Cwd: "/p/alpha", Preview: "fix the upload step"},
+		{Provider: "copilot", Cwd: "/p/beta", Preview: "运行微信报错"},
 	}
 	m := &picker{sessions: sessions, chosen: -1}
 	m.targets = make([]string, len(sessions))
@@ -54,19 +58,20 @@ func TestRefilterProviderTermExcludesOthers(t *testing.T) {
 		t.Errorf(`search "claude" → providers %v, want [claude]`, got)
 	}
 
-	// provider + text term: codex sessions about binance.
-	m.input.SetValue("codex binance")
+	// provider + text term: the codex session whose cwd is /p/alpha.
+	m.input.SetValue("codex alpha")
 	m.refilter()
 	got := m.providersOf()
 	if len(got) != 1 || got[0] != "codex" {
-		t.Errorf(`search "codex binance" → providers %v, want [codex]`, got)
+		t.Errorf(`search "codex alpha" → providers %v, want [codex]`, got)
 	}
 
-	// plain text term spans providers.
-	m.input.SetValue("binance")
+	// plain (non-provider) text term matches by row content, whatever the
+	// provider — here only the codex "fix the upload step" row.
+	m.input.SetValue("upload")
 	m.refilter()
-	if len(m.filtered) != 2 {
-		t.Errorf(`search "binance" → %d rows, want 2`, len(m.filtered))
+	if got := m.providersOf(); len(got) != 1 || got[0] != "codex" {
+		t.Errorf(`search "upload" → providers %v, want [codex]`, got)
 	}
 
 	// empty query shows everything.

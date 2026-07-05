@@ -1,4 +1,6 @@
-package main
+// Package resume builds and runs the command that re-enters a session in its
+// original working directory, and renders it for the shell key widgets.
+package resume
 
 import (
 	"encoding/json"
@@ -6,44 +8,49 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/jarvan1/aiss/internal/session"
 )
 
-// resumePlan describes how to re-enter a session.
-type resumePlan struct {
+// Plan describes how to re-enter a session.
+type Plan struct {
 	dir  string   // directory to run in (created if missing)
 	name string   // executable
 	args []string // arguments
 	note string   // human-facing note (e.g. gemini has no resume-by-id)
 }
 
-// planResume builds the command that re-enters a session in its original dir.
-func planResume(s Session) (resumePlan, error) {
+// Note returns the human-facing note, if any (e.g. gemini has no resume-by-id).
+func (p Plan) Note() string { return p.note }
+
+// PlanResume builds the command that re-enters a session in its original dir.
+func PlanResume(s session.Session) (Plan, error) {
 	dir := s.Cwd
 	if dir == "" {
 		dir, _ = os.Getwd()
 	}
 	switch s.Provider {
 	case "claude":
-		return resumePlan{dir, "claude", []string{"--resume", s.ID}, ""}, nil
+		return Plan{dir, "claude", []string{"--resume", s.ID}, ""}, nil
 	case "codex":
 		args := []string{"resume", s.ID}
 		if model := codexModel(s.File); model != "" {
 			args = append(args, "-m", model)
 		}
-		return resumePlan{dir, "codex", args, ""}, nil
+		return Plan{dir, "codex", args, ""}, nil
 	case "copilot":
-		return resumePlan{dir, "copilot", []string{"--resume=" + s.ID}, ""}, nil
+		return Plan{dir, "copilot", []string{"--resume=" + s.ID}, ""}, nil
 	case "gemini":
-		return resumePlan{dir, "gemini", nil, "gemini-cli has no resume-by-id; opening in the directory"}, nil
+		return Plan{dir, "gemini", nil, "gemini-cli has no resume-by-id; opening in the directory"}, nil
 	}
-	return resumePlan{}, fmt.Errorf("unknown provider %q", s.Provider)
+	return Plan{}, fmt.Errorf("unknown provider %q", s.Provider)
 }
 
 // codexModel reads the model the codex session was recorded with, so resume
 // doesn't silently switch defaults.
 func codexModel(file string) string {
 	var model string
-	eachLine(file, func(raw []byte) bool {
+	session.EachLine(file, func(raw []byte) bool {
 		var l struct {
 			Payload struct {
 				Model string `json:"model"`
@@ -60,11 +67,11 @@ func codexModel(file string) string {
 
 // Run executes the plan, inheriting the terminal. The session's original dir is
 // created if it was deleted, so resume-by-cwd lookups still match.
-func (p resumePlan) Run() error {
+func (p Plan) Run() error {
 	if _, err := exec.LookPath(p.name); err != nil {
 		return fmt.Errorf("%s not found on PATH (install it to resume)", p.name)
 	}
-	if !dirExists(p.dir) {
+	if !session.DirExists(p.dir) {
 		if err := os.MkdirAll(p.dir, 0o755); err != nil {
 			return err
 		}
@@ -76,7 +83,7 @@ func (p resumePlan) Run() error {
 }
 
 // Shell renders the plan as a copy-pasteable shell command (for --print).
-func (p resumePlan) Shell() string {
+func (p Plan) Shell() string {
 	cmd := fmt.Sprintf("cd %s && %s", shellQuote(p.dir), p.name)
 	for _, a := range p.args {
 		cmd += " " + shellQuote(a)
@@ -87,7 +94,7 @@ func (p resumePlan) Shell() string {
 // PowerShell renders the plan for PowerShell (--print --pwsh). PowerShell has no
 // `( cd … && … )` subshell, so we Push-Location, run, then Pop-Location in a
 // finally block so the caller's directory is always restored.
-func (p resumePlan) PowerShell() string {
+func (p Plan) PowerShell() string {
 	var b strings.Builder
 	b.WriteString("Push-Location " + pwshQuote(p.dir) + "; try { & " + pwshQuote(p.name))
 	for _, a := range p.args {
