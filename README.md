@@ -45,6 +45,12 @@ go install github.com/jarvan1/aiss@latest        # needs Go 1.21+
 eval "$(aiss init zsh)"     # or: aiss init bash | aiss init fish
 ```
 
+On Windows (PowerShell), add this to your `$PROFILE` instead:
+
+```powershell
+Invoke-Expression (& aiss init powershell | Out-String)
+```
+
 This binds **Ctrl-X Ctrl-W**. Without it, just run `aiss`.
 
 ## Usage
@@ -73,11 +79,15 @@ eval "$(aiss init bash)"    # bash  → ~/.bashrc
 eval "$(aiss init fish)"    # fish  → ~/.config/fish/config.fish
 ```
 
-All three bind **Ctrl-X Ctrl-W**. zsh and fish run the selected session
-immediately; bash places the resume command on the line for you to press Enter
-(readline's `bind -x` can't reliably auto-accept — the same reason fzf's Ctrl-R
-behaves this way). Override the key with `AISS_KEYBIND` (zsh),
-`AISS_KEYBIND_BASH`, or `AISS_KEYBIND_FISH`.
+```powershell
+Invoke-Expression (& aiss init powershell | Out-String)   # PowerShell → $PROFILE
+```
+
+All four bind **Ctrl-X Ctrl-W**. zsh, fish, and PowerShell run the selected
+session immediately; bash places the resume command on the line for you to press
+Enter (readline's `bind -x` can't reliably auto-accept — the same reason fzf's
+Ctrl-R behaves this way). Override the key with `AISS_KEYBIND` (zsh),
+`AISS_KEYBIND_BASH`, `AISS_KEYBIND_FISH`, or `AISS_KEYBIND_PWSH`.
 
 (Working from a source checkout instead? The same snippets live in `shell/` and
 can be `source`d directly.)
