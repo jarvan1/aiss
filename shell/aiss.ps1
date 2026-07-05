@@ -19,6 +19,11 @@ if ((Get-Module -ListAvailable PSReadLine) -and (Get-Command aiss -ErrorAction S
         # command to stdout, which we capture. Don't redirect stderr — on Windows
         # that's where the UI is.
         $cmd = & aiss --print --pwsh -- $line
+        # The picker runs on the alt-screen; when it tears down, PSReadLine's
+        # render state is out of sync with the console. InvokePrompt resyncs it
+        # first — without this, AcceptLine is swallowed and the command only runs
+        # after a second Enter.
+        [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
         if ($cmd) {
             [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
             [Microsoft.PowerShell.PSConsoleReadLine]::Insert(($cmd -join "`n"))
