@@ -47,5 +47,15 @@ func openConsole() (in, out *os.File, closeFn func(), ok bool) {
 		ci.Close()
 		return nil, nil, nil, false
 	}
-	return ci, co, func() { ci.Close(); co.Close() }, true
+	return ci, co, func() {
+		co.Close()
+		// Deliberately do NOT close ci. bubbletea's fallback input reader
+		// leaves an uncancellable blocked read pending on it (cancelreader
+		// can't cancel console reads), and os.File.Close waits for in-flight
+		// reads to finish — so closing here would block the whole process
+		// until the user pressed one more key. That stall is what made the
+		// pwsh widget need a second Enter: `$cmd = & aiss ...` only returned
+		// after the extra keypress released this read. The handle is torn
+		// down by process exit a few milliseconds later anyway.
+	}, true
 }
