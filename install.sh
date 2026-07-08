@@ -3,15 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/jarvan1/aiss/main/install.sh | sh
 #
-# Behind the Great Firewall? Route downloads through a GitHub mirror:
-#   curl -fsSL https://raw.githubusercontent.com/jarvan1/aiss/main/install.sh \
-#     | sh -s -- --proxy https://gh-proxy.org/
-#
-# Options / env overrides:
-#   --proxy <url> | AISS_PROXY   prefix GitHub download URLs with this mirror
-#                                (e.g. https://gh-proxy.org/); default: none
-#   AISS_VERSION                 version to install (e.g. v0.2.0); default: latest
-#   AISS_INSTALL_DIR             install directory; default: ~/.local/bin
+# Env overrides:
+#   AISS_VERSION       version to install (e.g. v0.1.4); default: latest release
+#   AISS_INSTALL_DIR   install directory; default: ~/.local/bin
 #
 # POSIX sh — no bashisms, so it runs under dash/ash/busybox too.
 set -eu
@@ -21,34 +15,6 @@ BIN="aiss"
 
 err() { printf 'aiss-install: %s\n' "$1" >&2; exit 1; }
 info() { printf 'aiss-install: %s\n' "$1" >&2; }
-
-# --- parse args -------------------------------------------------------------
-PROXY="${AISS_PROXY:-}"
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --proxy) PROXY="${2:-}"; shift 2 ;;
-    --proxy=*) PROXY="${1#--proxy=}"; shift ;;
-    -h | --help)
-      sed -n '2,18p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
-      exit 0 ;;
-    *) err "unknown argument: $1" ;;
-  esac
-done
-# Normalize: ensure a single trailing slash so concatenation is clean.
-if [ -n "$PROXY" ]; then
-  PROXY="${PROXY%/}/"
-fi
-
-# mirror wraps a GitHub download URL with the proxy (github.com / raw / release
-# assets). The GitHub API is intentionally NOT proxied — mirrors typically 403
-# api.github.com, so version resolution always goes direct (see below).
-mirror() {
-  if [ -n "$PROXY" ]; then
-    printf '%s%s' "$PROXY" "$1"
-  else
-    printf '%s' "$1"
-  fi
-}
 
 # --- pick a downloader ------------------------------------------------------
 if command -v curl >/dev/null 2>&1; then
@@ -77,23 +43,18 @@ case "$arch" in
 esac
 
 # --- resolve version --------------------------------------------------------
-# Version resolution hits the GitHub API directly (not the proxy: mirrors 403
-# api.github.com). If that fails behind a firewall, tell the user to pin one.
 ver="${AISS_VERSION:-}"
 if [ -z "$ver" ]; then
   info "resolving latest release…"
   # Parse tag_name out of the GitHub API without needing jq.
-  ver=$(dl "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
+  ver=$(dl "https://api.github.com/repos/$REPO/releases/latest" \
     | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
-  if [ -z "$ver" ]; then
-    err "could not reach the GitHub API to find the latest version.
-  Pin one explicitly, e.g.:  AISS_VERSION=v0.2.0 (see the releases page)"
-  fi
+  [ -n "$ver" ] || err "could not determine latest version (set AISS_VERSION)"
 fi
 num=${ver#v} # asset names carry the version without the leading v
 
 asset="${BIN}_${num}_${os}_${arch}.tar.gz"
-url=$(mirror "https://github.com/$REPO/releases/download/$ver/$asset")
+url="https://github.com/$REPO/releases/download/$ver/$asset"
 
 # --- download + extract -----------------------------------------------------
 tmp=$(mktemp -d 2>/dev/null || mktemp -d -t aiss)
@@ -105,7 +66,7 @@ dlo "$url" "$tmp/$asset" || err "download failed: $url"
 # Best-effort checksum verification when a sha256 tool is available.
 # checksums.txt lines are "<sha256>  <filename>", so match field 2 exactly and
 # take field 1.
-if sums=$(dl "$(mirror "https://github.com/$REPO/releases/download/$ver/checksums.txt")" 2>/dev/null); then
+if sums=$(dl "https://github.com/$REPO/releases/download/$ver/checksums.txt" 2>/dev/null); then
   want=$(printf '%s\n' "$sums" | awk -v f="$asset" '$2==f {print $1}' | head -n1)
   if [ -n "$want" ]; then
     if command -v sha256sum >/dev/null 2>&1; then
