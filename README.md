@@ -36,8 +36,24 @@ to your user `PATH`:
 irm https://raw.githubusercontent.com/jarvan1/aiss/main/install.ps1 | iex
 ```
 
-Both honor `AISS_VERSION` (e.g. `v0.1.4`) and `AISS_INSTALL_DIR` to pin the
+Both honor `AISS_VERSION` (e.g. `v0.2.0`) and `AISS_INSTALL_DIR` to pin the
 version or install location.
+
+**China (behind the GFW)** — route the binary download through a GitHub mirror
+with `--proxy` / `-Proxy`. Pin `AISS_VERSION`, since the mirror can't reach the
+GitHub API used to auto-detect the latest release:
+
+```sh
+# Linux / macOS
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/jarvan1/aiss/main/install.sh \
+  | AISS_VERSION=v0.2.0 sh -s -- --proxy https://gh-proxy.org/
+```
+
+```powershell
+# Windows (PowerShell)
+$env:AISS_VERSION='v0.2.0'
+& ([scriptblock]::Create((irm https://gh-proxy.org/https://raw.githubusercontent.com/jarvan1/aiss/main/install.ps1))) -Proxy https://gh-proxy.org/
+```
 
 **Homebrew** (macOS / Linux):
 
