@@ -22,6 +22,23 @@ I want to build a zsh plugin that searches AI CLI session history…
 
 ## Install
 
+**One-line install** (Linux / macOS) — downloads the right binary for your
+OS/arch, verifies its checksum, and drops it in `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jarvan1/aiss/main/install.sh | sh
+```
+
+**Windows** (PowerShell) — installs to `%LOCALAPPDATA%\Programs\aiss` and adds it
+to your user `PATH`:
+
+```powershell
+irm https://raw.githubusercontent.com/jarvan1/aiss/main/install.ps1 | iex
+```
+
+Both honor `AISS_VERSION` (e.g. `v0.1.4`) and `AISS_INSTALL_DIR` to pin the
+version or install location.
+
 **Homebrew** (macOS / Linux):
 
 ```sh
