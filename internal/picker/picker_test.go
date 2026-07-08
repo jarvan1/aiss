@@ -3,6 +3,7 @@ package picker
 import (
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jarvan1/aiss/internal/session"
 )
 
@@ -79,5 +80,77 @@ func TestRefilterProviderTermExcludesOthers(t *testing.T) {
 	m.refilter()
 	if len(m.filtered) != 4 {
 		t.Errorf(`empty query → %d rows, want 4`, len(m.filtered))
+	}
+}
+
+func TestDeleteConfirmDropsRow(t *testing.T) {
+	m := newTestPicker()
+	var deleted []session.Session
+	m.del = func(s session.Session) error {
+		deleted = append(deleted, s)
+		return nil
+	}
+	m.refilter() // all 4 rows
+	m.cursor = 1 // the codex "/p/demo" row
+
+	// Ctrl-D arms confirmation but deletes nothing yet.
+	m.Update(keyMsg("ctrl+d"))
+	if !m.confirming {
+		t.Fatal("ctrl+d should enter confirming state")
+	}
+	if len(deleted) != 0 {
+		t.Fatal("nothing should be deleted before y")
+	}
+
+	// A non-y key cancels without deleting.
+	m.Update(keyMsg("n"))
+	if m.confirming || len(deleted) != 0 {
+		t.Fatalf("n should cancel: confirming=%v deleted=%d", m.confirming, len(deleted))
+	}
+
+	// Ctrl-D then y deletes and drops the row.
+	m.cursor = 1
+	m.Update(keyMsg("ctrl+d"))
+	m.Update(keyMsg("y"))
+	if len(deleted) != 1 || deleted[0].Cwd != "/p/demo" {
+		t.Fatalf("expected /p/demo deleted, got %v", deleted)
+	}
+	if len(m.sessions) != 3 || len(m.filtered) != 3 {
+		t.Fatalf("row not dropped: sessions=%d filtered=%d", len(m.sessions), len(m.filtered))
+	}
+	for _, s := range m.sessions {
+		if s.Cwd == "/p/demo" {
+			t.Error("/p/demo still present in sessions")
+		}
+	}
+}
+
+func TestDeleteFailureKeepsRow(t *testing.T) {
+	m := newTestPicker()
+	m.del = func(session.Session) error { return errTest }
+	m.refilter()
+	m.cursor = 0
+	m.Update(keyMsg("ctrl+d"))
+	m.Update(keyMsg("y"))
+	if len(m.sessions) != 4 {
+		t.Fatalf("failed delete should keep the row, got %d sessions", len(m.sessions))
+	}
+	if m.status == "" {
+		t.Error("expected an error status after failed delete")
+	}
+}
+
+var errTest = fmtError("boom")
+
+type fmtError string
+
+func (e fmtError) Error() string { return string(e) }
+
+func keyMsg(s string) tea.KeyMsg {
+	switch s {
+	case "ctrl+d":
+		return tea.KeyMsg{Type: tea.KeyCtrlD}
+	default:
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
 }

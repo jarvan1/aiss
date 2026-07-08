@@ -28,7 +28,15 @@ func rowLabel(s session.Session) string {
 	return fmt.Sprintf("%-7s %-34.34s %s", s.Provider, session.Tilde(s.Cwd), prev)
 }
 
-var cursorStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
+var (
+	cursorStyle  = lipgloss.NewStyle().Bold(true).Reverse(true)
+	confirmStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")) // red
+	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))            // green
+)
+
+// deleteFunc removes a session from disk. Injected so the picker doesn't import
+// the del package directly (keeps it testable and decoupled).
+type deleteFunc func(session.Session) error
 
 // picker is the bubbletea model backing Pick.
 type picker struct {
@@ -43,6 +51,11 @@ type picker struct {
 	chosen   int     // index into sessions; -1 = aborted
 	pollFd   uintptr // output fd to poll for size (Windows); 0 disables polling
 	pollOn   bool    // whether size polling is active
+
+	del        deleteFunc // removes a session from disk; nil disables deletion
+	confirming bool       // awaiting y/N on a pending delete
+	pendingRow int        // index into filtered marked for deletion
+	status     string     // transient message shown on the prompt line
 }
 
 // resizeTickMsg drives the Windows size poller (see Init).
@@ -153,6 +166,36 @@ func (m *picker) refilter() {
 	m.clampCursor()
 }
 
+// doDelete removes the session under pendingRow from disk and from the model,
+// leaving the highlight on a sensible neighbor. Called only after y-confirm.
+func (m *picker) doDelete() {
+	m.confirming = false
+	if m.del == nil || m.pendingRow < 0 || m.pendingRow >= len(m.filtered) {
+		m.status = ""
+		return
+	}
+	si := m.filtered[m.pendingRow]
+	s := m.sessions[si]
+	if err := m.del(s); err != nil {
+		m.status = "delete failed: " + err.Error()
+		return
+	}
+	m.dropSession(si)
+	m.status = "deleted " + s.Provider + " " + session.Tilde(s.Cwd)
+}
+
+// dropSession removes sessions[si] and its parallel targets entry, then rebuilds
+// the filtered view. filtered holds indices into sessions, so every index past
+// si shifts down by one — refilter() recomputes them from scratch.
+func (m *picker) dropSession(si int) {
+	m.sessions = append(m.sessions[:si], m.sessions[si+1:]...)
+	m.targets = append(m.targets[:si], m.targets[si+1:]...)
+	if m.cursor >= len(m.filtered)-1 {
+		m.cursor = max(0, m.cursor-1)
+	}
+	m.refilter() // rebuilds filtered against the shrunk sessions slice
+}
+
 func (m *picker) clampCursor() {
 	if m.cursor >= len(m.filtered) {
 		m.cursor = max(0, len(m.filtered)-1)
@@ -161,6 +204,7 @@ func (m *picker) clampCursor() {
 }
 
 func (m *picker) move(d int) {
+	m.status = ""
 	if len(m.filtered) == 0 {
 		return
 	}
@@ -197,6 +241,17 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return resizeTickMsg{}
 		}))
 	case tea.KeyMsg:
+		// While confirming a delete, keys answer y/N and nothing else.
+		if m.confirming {
+			switch msg.String() {
+			case "y", "Y":
+				m.doDelete()
+			default: // any other key cancels
+				m.confirming = false
+				m.status = ""
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			m.chosen = -1
@@ -212,6 +267,13 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "ctrl+n", "ctrl+j":
 			m.move(1)
 			return m, nil
+		case "ctrl+d":
+			// Arm a delete on the highlighted row; requires y confirmation.
+			if m.del != nil && len(m.filtered) > 0 {
+				m.confirming = true
+				m.pendingRow = m.cursor
+			}
+			return m, nil
 		}
 	}
 	old := m.input.Value()
@@ -219,9 +281,22 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	if m.input.Value() != old {
 		m.cursor, m.offset = 0, 0
+		m.status = ""
 		m.refilter()
 	}
 	return m, cmd
+}
+
+// topLine is the first row: the search input, or a delete confirm/status line.
+func (m *picker) topLine() string {
+	if m.confirming && m.pendingRow >= 0 && m.pendingRow < len(m.filtered) {
+		s := m.sessions[m.filtered[m.pendingRow]]
+		return confirmStyle.Render(fmt.Sprintf("delete %s  %s ?  (y/N)", s.Provider, session.Tilde(s.Cwd)))
+	}
+	if m.status != "" {
+		return statusStyle.Render(m.status)
+	}
+	return m.input.View()
 }
 
 func (m *picker) View() string {
@@ -261,7 +336,7 @@ func (m *picker) View() string {
 	left := lipgloss.NewStyle().Width(leftW).Height(body).Render(strings.Join(rows, "\n"))
 
 	if !showPreview {
-		return m.input.View() + "\n" + left
+		return m.topLine() + "\n" + left
 	}
 
 	// --- preview (right) ---
@@ -282,19 +357,20 @@ func (m *picker) View() string {
 		Render(strings.Join(plines, "\n"))
 
 	body2 := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	return m.input.View() + "\n" + body2
+	return m.topLine() + "\n" + body2
 }
 
 // Pick shows the interactive fuzzy finder and returns the chosen session. The
-// bool is false if the user aborted (Esc/Ctrl-C) or nothing matched.
-func Pick(sessions []session.Session, query string) (session.Session, bool) {
+// bool is false if the user aborted (Esc/Ctrl-C) or nothing matched. del, if
+// non-nil, enables Ctrl-D to delete the highlighted session from disk.
+func Pick(sessions []session.Session, query string, del func(session.Session) error) (session.Session, bool) {
 	ti := textinput.New()
 	ti.Prompt = "ai-sessions ❯ "
 	ti.SetValue(query)
 	ti.Focus()
 	ti.CursorEnd()
 
-	m := &picker{sessions: sessions, input: ti, chosen: -1}
+	m := &picker{sessions: sessions, input: ti, chosen: -1, del: del}
 	m.targets = make([]string, len(sessions))
 	for i, s := range sessions {
 		m.targets[i] = rowLabel(s)

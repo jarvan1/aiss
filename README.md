@@ -67,6 +67,14 @@ In the picker, type to fuzzy-filter (the provider name is part of each row, so
 typing `claude` narrows to Claude), use the arrow keys to move, watch the live
 preview pane on the right, and press Enter to resume.
 
+**Delete a session** — press **Ctrl-D** on the highlighted row, then `y` to
+confirm (any other key cancels). Deletion is provider-aware: for Codex it calls
+`codex delete` (which also prunes Codex's own index) and removes the rollout
+file; for Claude it removes the transcript plus its `session-env/` and
+`file-history/` sidecars; for Copilot and Gemini it removes the session
+directory. It only ever touches paths under `~` that are several levels deep, so
+it can't wander into `~/.claude` itself.
+
 ### Key binding
 
 A binary can't, by itself, put a command on your shell's command line (this is

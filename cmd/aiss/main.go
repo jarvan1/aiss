@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jarvan1/aiss/internal/del"
 	"github.com/jarvan1/aiss/internal/picker"
 	"github.com/jarvan1/aiss/internal/preview"
 	"github.com/jarvan1/aiss/internal/resume"
@@ -77,13 +78,15 @@ func main() {
 		}
 	}
 
-	sessions := scan.Scan(session.DefaultDirs(), session.ShowMissing())
+	dirs := session.DefaultDirs()
+	sessions := scan.Scan(dirs, session.ShowMissing())
 	if len(sessions) == 0 {
 		fmt.Fprintln(os.Stderr, "aiss: no AI CLI sessions found.")
 		os.Exit(1)
 	}
 
-	s, ok := picker.Pick(sessions, query)
+	deleteFn := func(s session.Session) error { return del.Delete(s, dirs) }
+	s, ok := picker.Pick(sessions, query, deleteFn)
 	if !ok {
 		return // user aborted
 	}
@@ -146,6 +149,7 @@ func cmdPreview(args []string) {
 const usage = `aiss — fuzzy picker over AI CLI session histories
 
   aiss [query]              pick a session and resume it in its original dir
+                            (Ctrl-D deletes the highlighted session, y to confirm)
   aiss --print [query]      print the resume command instead of running it
   aiss init <shell>         print shell integration for zsh|bash|fish|powershell
   aiss scan                 list sessions (provider, id, cwd, preview, file)
