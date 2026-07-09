@@ -32,7 +32,11 @@ var (
 	cursorStyle  = lipgloss.NewStyle().Bold(true).Reverse(true)
 	confirmStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")) // red
 	statusStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))            // green
+	hintStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))            // red key hint
 )
+
+// deleteHint is the shortcut reminder shown at the right of the search line.
+const deleteHint = "Ctrl+D delete"
 
 // deleteFunc removes a session from disk. Injected so the picker doesn't import
 // the del package directly (keeps it testable and decoupled).
@@ -296,7 +300,18 @@ func (m *picker) topLine() string {
 	if m.status != "" {
 		return statusStyle.Render(m.status)
 	}
-	return m.input.View()
+	in := m.input.View()
+	// When deletion is enabled, right-align a dim "^d delete" reminder on the
+	// search line so the shortcut is discoverable. Dropped if the terminal is
+	// too narrow to fit it without crowding the input.
+	if m.del != nil && m.width > 0 {
+		hint := hintStyle.Render(deleteHint)
+		gap := m.width - lipgloss.Width(in) - lipgloss.Width(hint)
+		if gap >= 2 {
+			return in + strings.Repeat(" ", gap) + hint
+		}
+	}
+	return in
 }
 
 func (m *picker) View() string {

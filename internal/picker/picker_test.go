@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -137,6 +138,38 @@ func TestDeleteFailureKeepsRow(t *testing.T) {
 	}
 	if m.status == "" {
 		t.Error("expected an error status after failed delete")
+	}
+}
+
+func TestTopLineDeleteHint(t *testing.T) {
+	m := newTestPicker()
+	m.input.Prompt = "ai-sessions ❯ "
+	m.width = 80
+
+	// No hint until deletion is enabled.
+	if strings.Contains(m.topLine(), deleteHint) {
+		t.Error("hint should be absent when del is nil")
+	}
+
+	// With del set and a wide terminal, the hint is shown.
+	m.del = func(session.Session) error { return nil }
+	if !strings.Contains(m.topLine(), deleteHint) {
+		t.Errorf("expected %q on the search line, got %q", deleteHint, m.topLine())
+	}
+
+	// A narrow terminal drops it rather than crowding the input.
+	m.width = 8
+	if strings.Contains(m.topLine(), deleteHint) {
+		t.Error("hint should be dropped on a narrow terminal")
+	}
+
+	// The confirm prompt takes over the line entirely (no hint).
+	m.width = 80
+	m.confirming = true
+	m.pendingRow = 0
+	m.filtered = []int{0}
+	if strings.Contains(m.topLine(), deleteHint) {
+		t.Error("hint should not appear during a delete confirm")
 	}
 }
 
