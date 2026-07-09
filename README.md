@@ -23,7 +23,9 @@ I want to build a zsh plugin that searches AI CLI session history…
 ## Install
 
 **One-line install** (Linux / macOS) — downloads the right binary for your
-OS/arch, verifies its checksum, and drops it in `~/.local/bin`:
+OS/arch, verifies its checksum, drops it in `~/.local/bin`, and adds that to
+your shell profile (`.zshrc` / `.bashrc` / `config.fish` / `.profile`, picked
+from `$SHELL`) if it isn't already on `PATH`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jarvan1/aiss/main/install.sh | sh
@@ -36,8 +38,9 @@ to your user `PATH`:
 irm https://raw.githubusercontent.com/jarvan1/aiss/main/install.ps1 | iex
 ```
 
-Both honor `AISS_VERSION` (e.g. `v0.1.4`) and `AISS_INSTALL_DIR` to pin the
-version or install location.
+Both honor `AISS_VERSION` (e.g. `v0.2.0`) and `AISS_INSTALL_DIR` to pin the
+version or install location, and `AISS_NO_MODIFY_PATH=1` to skip the PATH edit
+(they'll just print the line to add yourself).
 
 **Homebrew** (macOS / Linux):
 

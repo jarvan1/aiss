@@ -7,8 +7,9 @@
 
 .NOTES
   Env overrides:
-    AISS_VERSION      version to install (e.g. v0.1.4); default: latest release
-    AISS_INSTALL_DIR  install directory; default: %LOCALAPPDATA%\Programs\aiss
+    AISS_VERSION          version to install (e.g. v0.2.0); default: latest release
+    AISS_INSTALL_DIR      install directory; default: %LOCALAPPDATA%\Programs\aiss
+    AISS_NO_MODIFY_PATH   set to skip adding the install dir to your user PATH
 #>
 [CmdletBinding()]
 param()
@@ -81,9 +82,13 @@ try {
   # --- add to the user PATH if missing --------------------------------------
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if (($userPath -split ';') -notcontains $dir) {
-    [Environment]::SetEnvironmentVariable('Path', "$userPath;$dir", 'User')
-    $env:Path = "$env:Path;$dir"
-    Info "added $dir to your user PATH (restart the terminal to pick it up)"
+    if ($env:AISS_NO_MODIFY_PATH) {
+      Info "note: $dir is not on your PATH — add it manually, or drop AISS_NO_MODIFY_PATH"
+    } else {
+      [Environment]::SetEnvironmentVariable('Path', "$userPath;$dir", 'User')
+      $env:Path = "$env:Path;$dir"
+      Info "added $dir to your user PATH (restart the terminal to pick it up)"
+    }
   }
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
