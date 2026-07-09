@@ -54,10 +54,13 @@ func BuildPlan(s session.Session, dirs session.Dirs) (Plan, error) {
 			add(filepath.Join(claudeHome, "file-history", s.ID))
 		}
 	case "codex":
-		// Native `codex delete <id>` also prunes codex's history/index db, so
-		// prefer it; still remove the rollout file in case the command is gone.
+		// Native `codex delete` also prunes codex's history/index db, so prefer
+		// it; still remove the rollout file in case the command is gone. --force
+		// is required: without a TTY (we run from the picker), plain `codex
+		// delete` refuses with "cannot confirm ... without an interactive
+		// terminal", which would silently leave the index row behind.
 		if s.ID != "" {
-			p.nativeCmd = []string{"codex", "delete", s.ID}
+			p.nativeCmd = []string{"codex", "delete", "--force", s.ID}
 		}
 		add(s.File)
 	case "copilot":
