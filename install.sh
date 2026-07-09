@@ -4,8 +4,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/jarvan1/aiss/main/install.sh | sh
 #
 # Env overrides:
-#   AISS_VERSION       version to install (e.g. v0.1.4); default: latest release
-#   AISS_INSTALL_DIR   install directory; default: ~/.local/bin
+#   AISS_VERSION           version to install (e.g. v0.2.0); default: latest
+#   AISS_INSTALL_DIR       install directory; default: ~/.local/bin
+#   AISS_NO_MODIFY_PATH=1  don't touch your shell profile (just print a hint)
 #
 # POSIX sh — no bashisms, so it runs under dash/ash/busybox too.
 set -eu
@@ -102,12 +103,48 @@ fi
 
 info "installed $BIN $ver -> $dir/$BIN"
 
-# --- post-install hints -----------------------------------------------------
-case ":$PATH:" in
-  *":$dir:"*) : ;;
-  *) info "note: $dir is not on your PATH — add it, e.g.:"
-     printf '  export PATH="%s:$PATH"\n' "$dir" >&2 ;;
-esac
+# --- ensure $dir is on PATH -------------------------------------------------
+# If it already is, nothing to do. Otherwise, unless the user opted out, append
+# a line to the profile for their login shell ($SHELL) so new shells pick it up.
+ensure_path() {
+  case ":$PATH:" in
+    *":$dir:"*) return 0 ;; # already on PATH
+  esac
+
+  if [ -n "${AISS_NO_MODIFY_PATH:-}" ]; then
+    info "note: $dir is not on your PATH — add it, e.g.:"
+    printf '  export PATH="%s:$PATH"\n' "$dir" >&2
+    return 0
+  fi
+
+  shell=$(basename "${SHELL:-sh}")
+  profile=""
+  line="export PATH=\"$dir:\$PATH\""
+  case "$shell" in
+    zsh)  profile="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) # prefer the file bash actually reads on this OS
+          if [ -f "$HOME/.bashrc" ]; then profile="$HOME/.bashrc"; else profile="$HOME/.bash_profile"; fi ;;
+    fish) profile="$HOME/.config/fish/config.fish"
+          line="fish_add_path $dir" ;;
+    *)    profile="$HOME/.profile" ;; # sh/dash/ash and unknown POSIX shells
+  esac
+
+  # Idempotent: skip if we (or the user) already added this dir to the profile.
+  if [ -f "$profile" ] && grep -Fq "$dir" "$profile" 2>/dev/null; then
+    info "$dir already referenced in $profile"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$profile")" 2>/dev/null || true
+  if printf '\n# added by aiss installer\n%s\n' "$line" >>"$profile" 2>/dev/null; then
+    info "added $dir to PATH in $profile"
+    info "run 'source $profile' or open a new terminal to use aiss"
+  else
+    info "note: $dir is not on your PATH — add it, e.g.:"
+    printf '  %s\n' "$line" >&2
+  fi
+}
+ensure_path
 
 cat >&2 <<'EOF'
 aiss-install: done. Run `aiss` to start.
