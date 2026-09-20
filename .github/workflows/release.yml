@@ -28,3 +28,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      # GoReleaser v2 still renders Cask hooks with Homebrew's deprecated
+      # `postflight` DSL. Check out the Cask it just published, migrate it to
+      # `postflight_steps`, and push the corrected generated file.
+      - uses: actions/checkout@v5
+        with:
+          repository: jarvan1/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Normalize Homebrew Cask install steps
+        run: ruby scripts/normalize-homebrew-cask.rb homebrew-tap/Casks/aiss.rb
+
+      - name: Publish normalized Homebrew Cask
+        working-directory: homebrew-tap
+        run: |
+          if git diff --quiet -- Casks/aiss.rb; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/aiss.rb
+          git commit -m "fix(cask): use postflight_steps for aiss"
+          git push
