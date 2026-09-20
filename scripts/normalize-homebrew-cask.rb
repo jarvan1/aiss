@@ -13,6 +13,7 @@ replacements = {
   "  postflight do\n" => "  postflight_steps do\n",
   "    if OS.mac?\n" => "    on_macos do\n",
   "      system_command \"/usr/bin/xattr\"" => "      run \"/usr/bin/xattr\"",
+  '"#{staged_path}/aiss"' => '"{{staged_path}}/aiss"',
 }
 
 replacements.each do |from, to|
