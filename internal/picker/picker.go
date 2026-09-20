@@ -42,6 +42,28 @@ const deleteHint = "Ctrl+D delete"
 // the del package directly (keeps it testable and decoupled).
 type deleteFunc func(session.Session) error
 
+// previewFunc renders one session's preview. It is a field on picker so tests
+// can prove that rendering happens in a tea.Cmd rather than on the UI goroutine.
+type previewFunc func(session.Session, int) string
+
+type previewKey struct {
+	file  string
+	width int
+}
+
+type previewRequestMsg struct {
+	key     previewKey
+	session session.Session
+	token   uint64
+}
+
+type previewLoadedMsg struct {
+	key  previewKey
+	text string
+}
+
+const previewDebounce = 75 * time.Millisecond
+
 // picker is the bubbletea model backing Pick.
 type picker struct {
 	sessions []session.Session
@@ -60,6 +82,13 @@ type picker struct {
 	confirming bool       // awaiting y/N on a pending delete
 	pendingRow int        // index into filtered marked for deletion
 	status     string     // transient message shown on the prompt line
+
+	previewer      previewFunc
+	previewCache   map[previewKey]string
+	previewKey     previewKey
+	previewText    string
+	previewLoading bool
+	previewToken   uint64
 }
 
 // resizeTickMsg drives the Windows size poller (see Init).
@@ -101,6 +130,66 @@ func (m *picker) bodyHeight() int {
 		return 0
 	}
 	return m.height - 1 // one row for the input line
+}
+
+// paneWidths returns the same layout dimensions View uses. Keeping this in one
+// place also lets the async preview loader use the exact render width.
+func (m *picker) paneWidths() (leftW, rightW int, showPreview bool) {
+	leftW = m.width * 45 / 100
+	if leftW < 24 {
+		leftW = 24
+	}
+	if leftW > m.width {
+		leftW = m.width
+	}
+	rightW = m.width - leftW - 1 // 1 col for the divider
+	return leftW, rightW, rightW >= 12
+}
+
+// queuePreview schedules a debounced preview load for the highlighted row.
+// Session files produced by Codex Desktop can be hundreds of MB, so parsing one
+// synchronously from View would block every repaint and make selection appear
+// frozen. The token discards requests superseded by quick cursor movement.
+func (m *picker) queuePreview() tea.Cmd {
+	_, rightW, showPreview := m.paneWidths()
+	if !showPreview || len(m.filtered) == 0 {
+		m.previewToken++
+		m.previewKey = previewKey{}
+		m.previewText = ""
+		m.previewLoading = false
+		return nil
+	}
+
+	s := m.sessions[m.filtered[m.cursor]]
+	key := previewKey{file: s.File, width: rightW}
+	if key == m.previewKey && (m.previewLoading || m.previewText != "") {
+		return nil
+	}
+
+	m.previewToken++
+	m.previewKey = key
+	if text, ok := m.previewCache[key]; ok {
+		m.previewText = text
+		m.previewLoading = false
+		return nil
+	}
+
+	m.previewText = ""
+	m.previewLoading = true
+	token := m.previewToken
+	return tea.Tick(previewDebounce, func(time.Time) tea.Msg {
+		return previewRequestMsg{key: key, session: s, token: token}
+	})
+}
+
+func (m *picker) loadPreview(msg previewRequestMsg) tea.Cmd {
+	previewer := m.previewer
+	if previewer == nil {
+		previewer = preview.Preview
+	}
+	return func() tea.Msg {
+		return previewLoadedMsg{key: msg.key, text: previewer(msg.session, msg.key.width)}
+	}
 }
 
 var providers = []string{"claude", "codex", "copilot", "gemini"}
@@ -237,19 +326,35 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.fixScroll()
-		return m, nil
+		return m, m.queuePreview()
 	case resizeTickMsg:
 		// Poll the size and re-arm the tick. pollSize only emits a
 		// WindowSizeMsg when the size actually changed, so idle ticks are cheap.
 		return m, tea.Batch(m.pollSize(), tea.Tick(resizePollInterval, func(time.Time) tea.Msg {
 			return resizeTickMsg{}
 		}))
+	case previewRequestMsg:
+		if msg.token != m.previewToken || msg.key != m.previewKey {
+			return m, nil
+		}
+		return m, m.loadPreview(msg)
+	case previewLoadedMsg:
+		if m.previewCache == nil {
+			m.previewCache = make(map[previewKey]string)
+		}
+		m.previewCache[msg.key] = msg.text
+		if msg.key == m.previewKey {
+			m.previewText = msg.text
+			m.previewLoading = false
+		}
+		return m, nil
 	case tea.KeyMsg:
 		// While confirming a delete, keys answer y/N and nothing else.
 		if m.confirming {
 			switch msg.String() {
 			case "y", "Y":
 				m.doDelete()
+				return m, m.queuePreview()
 			default: // any other key cancels
 				m.confirming = false
 				m.status = ""
@@ -266,10 +371,18 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "up", "ctrl+p", "ctrl+k":
+			old := m.cursor
 			m.move(-1)
+			if m.cursor != old {
+				return m, m.queuePreview()
+			}
 			return m, nil
 		case "down", "ctrl+n", "ctrl+j":
+			old := m.cursor
 			m.move(1)
+			if m.cursor != old {
+				return m, m.queuePreview()
+			}
 			return m, nil
 		case "ctrl+d":
 			// Arm a delete on the highlighted row; requires y confirmation.
@@ -287,6 +400,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursor, m.offset = 0, 0
 		m.status = ""
 		m.refilter()
+		return m, tea.Batch(cmd, m.queuePreview())
 	}
 	return m, cmd
 }
@@ -320,15 +434,7 @@ func (m *picker) View() string {
 	}
 	body := m.bodyHeight()
 
-	leftW := m.width * 45 / 100
-	if leftW < 24 {
-		leftW = 24
-	}
-	if leftW > m.width {
-		leftW = m.width
-	}
-	rightW := m.width - leftW - 1 // 1 col for the divider
-	showPreview := rightW >= 12
+	leftW, rightW, showPreview := m.paneWidths()
 
 	// --- list (left) ---
 	var rows []string
@@ -355,9 +461,9 @@ func (m *picker) View() string {
 	}
 
 	// --- preview (right) ---
-	var prev string
-	if len(m.filtered) > 0 {
-		prev = preview.Preview(m.sessions[m.filtered[m.cursor]], rightW)
+	prev := m.previewText
+	if m.previewLoading {
+		prev = hintStyle.Render("Loading preview…")
 	}
 	plines := strings.Split(prev, "\n")
 	if len(plines) > body {
@@ -385,7 +491,14 @@ func Pick(sessions []session.Session, query string, del func(session.Session) er
 	ti.Focus()
 	ti.CursorEnd()
 
-	m := &picker{sessions: sessions, input: ti, chosen: -1, del: del}
+	m := &picker{
+		sessions:     sessions,
+		input:        ti,
+		chosen:       -1,
+		del:          del,
+		previewer:    preview.Preview,
+		previewCache: make(map[previewKey]string),
+	}
 	m.targets = make([]string, len(sessions))
 	for i, s := range sessions {
 		m.targets[i] = rowLabel(s)
