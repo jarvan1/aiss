@@ -254,6 +254,33 @@ func TestViewLeavesLastTerminalColumnUnused(t *testing.T) {
 	}
 }
 
+func TestFullRepaintReusesWindowSizeWithoutClearing(t *testing.T) {
+	m := newTestPicker()
+	m.width, m.height = 120, 40
+
+	msg, ok := m.fullRepaint()().(tea.WindowSizeMsg)
+	if !ok {
+		t.Fatal("full repaint must use WindowSizeMsg instead of clearing the screen")
+	}
+	if msg.Width != m.width || msg.Height != m.height {
+		t.Fatalf("repaint size = %dx%d, want %dx%d", msg.Width, msg.Height, m.width, m.height)
+	}
+}
+
+func TestViewKeepsStyledPreviewTitleLine(t *testing.T) {
+	m := newTestPicker()
+	m.refilter()
+	m.width, m.height = 100, 30
+	m.previewText = "\x1b[36m╭─ \x1b[1mcodex\x1b[0m\x1b[36m · codex-auto-review ─────╮\x1b[0m\n" +
+		"\x1b[36m│\x1b[0m 📁 ~"
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) < 2 || !strings.Contains(lines[1], "codex-auto-review") {
+		t.Fatalf("first preview row lost its styled title: %q", view)
+	}
+}
+
 var errTest = fmtError("boom")
 
 type fmtError string

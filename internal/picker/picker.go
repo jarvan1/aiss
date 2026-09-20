@@ -201,6 +201,18 @@ func (m *picker) loadPreview(msg previewRequestMsg) tea.Cmd {
 	}
 }
 
+// fullRepaint asks Bubble Tea to invalidate its differential-render cache and
+// overwrite every row in place. Some embedded terminals disagree with the
+// renderer about wide-rune column positions, which can otherwise leave an old
+// highlighted row visible. Re-sending the current size triggers a repaint
+// without ClearScreen's visible flash.
+func (m *picker) fullRepaint() tea.Cmd {
+	w, h := m.width, m.height
+	return func() tea.Msg {
+		return tea.WindowSizeMsg{Width: w, Height: h}
+	}
+}
+
 var providers = []string{"claude", "codex", "copilot", "gemini"}
 
 // matchProvider reports the provider a query term selects: an exact name, or an
@@ -355,6 +367,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.key == m.previewKey {
 			m.previewText = msg.text
 			m.previewLoading = false
+			return m, m.fullRepaint()
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -363,7 +376,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "y", "Y":
 				m.doDelete()
-				return m, m.queuePreview()
+				return m, m.fullRepaint()
 			default: // any other key cancels
 				m.confirming = false
 				m.status = ""
@@ -383,14 +396,14 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			old := m.cursor
 			m.move(-1)
 			if m.cursor != old {
-				return m, m.queuePreview()
+				return m, m.fullRepaint()
 			}
 			return m, nil
 		case "down", "ctrl+n", "ctrl+j":
 			old := m.cursor
 			m.move(1)
 			if m.cursor != old {
-				return m, m.queuePreview()
+				return m, m.fullRepaint()
 			}
 			return m, nil
 		case "ctrl+d":
@@ -409,7 +422,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursor, m.offset = 0, 0
 		m.status = ""
 		m.refilter()
-		return m, tea.Batch(cmd, m.queuePreview())
+		return m, tea.Batch(cmd, m.fullRepaint())
 	}
 	return m, cmd
 }
@@ -437,6 +450,14 @@ func (m *picker) topLine() string {
 	return in
 }
 
+func padLine(line string, width int) string {
+	line = truncate.String(line, uint(max(0, width)))
+	if pad := width - lipgloss.Width(line); pad > 0 {
+		line += strings.Repeat(" ", pad)
+	}
+	return line
+}
+
 func (m *picker) View() string {
 	if m.width == 0 || m.height == 0 {
 		return ""
@@ -446,27 +467,26 @@ func (m *picker) View() string {
 	leftW, rightW, showPreview := m.paneWidths()
 
 	// --- list (left) ---
-	var rows []string
+	rows := make([]string, body)
 	for i := 0; i < body; i++ {
 		idx := m.offset + i
 		if idx >= len(m.filtered) {
-			rows = append(rows, "")
+			rows[i] = strings.Repeat(" ", leftW)
 			continue
 		}
 		line := "  " + m.targets[m.filtered[idx]]
 		if idx == m.cursor {
 			line = "> " + m.targets[m.filtered[idx]]
 		}
-		line = truncate.String(line, uint(leftW))
+		line = padLine(line, leftW)
 		if idx == m.cursor {
 			line = cursorStyle.Render(line)
 		}
-		rows = append(rows, line)
+		rows[i] = line
 	}
-	left := lipgloss.NewStyle().Width(leftW).Height(body).Render(strings.Join(rows, "\n"))
 
 	if !showPreview {
-		return m.topLine() + "\n" + left
+		return m.topLine() + "\n" + strings.Join(rows, "\n")
 	}
 
 	// --- preview (right) ---
@@ -475,19 +495,15 @@ func (m *picker) View() string {
 		prev = hintStyle.Render("Loading preview…")
 	}
 	plines := strings.Split(prev, "\n")
-	if len(plines) > body {
-		plines = plines[:body]
+	divider := "│"
+	for i := 0; i < body; i++ {
+		line := ""
+		if i < len(plines) {
+			line = plines[i]
+		}
+		rows[i] += divider + padLine(line, rightW)
 	}
-	for i := range plines {
-		plines[i] = truncate.String(plines[i], uint(rightW))
-	}
-	right := lipgloss.NewStyle().
-		Width(rightW).Height(body).
-		BorderStyle(lipgloss.NormalBorder()).BorderLeft(true).
-		Render(strings.Join(plines, "\n"))
-
-	body2 := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	return m.topLine() + "\n" + body2
+	return m.topLine() + "\n" + strings.Join(rows, "\n")
 }
 
 // Pick shows the interactive fuzzy finder and returns the chosen session. The

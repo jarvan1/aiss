@@ -8,7 +8,9 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jarvan1/aiss/internal/session"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/reflow/truncate"
@@ -53,13 +55,39 @@ func Preview(s session.Session, width int) string {
 		if t.role == "assistant" {
 			label = cAsst + "◀ ASSISTANT" + cReset
 		}
-		b.WriteString(label + "\n" + t.text + "\n\n")
+		b.WriteString(label + "\n" + sanitizeTranscriptText(t.text) + "\n\n")
 	}
 	return b.String()
 }
 
+// sanitizeTranscriptText prevents session content from controlling the picker
+// terminal or invalidating its width calculations. In particular, Desktop
+// tool results often contain tabs: terminals expand them to tab stops while
+// width libraries count them as zero, causing wrapping that scrolls the header
+// off-screen. Generated preview styling is added after this sanitization.
+func sanitizeTranscriptText(text string) string {
+	text = ansi.Strip(text)
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	text = strings.ReplaceAll(text, "\t", "    ")
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, text)
+}
+
+func sanitizeInline(text string) string {
+	return strings.ReplaceAll(sanitizeTranscriptText(text), "\n", " ")
+}
+
 func renderHeader(m meta, width int) string {
-	cwd := session.Tilde(m.cwd)
+	provider := sanitizeInline(m.provider)
+	model := sanitizeInline(m.model)
+	verLine := sanitizeInline(m.verLine)
+	branch := sanitizeInline(m.branch)
+	cwd := sanitizeInline(session.Tilde(m.cwd))
 	d0, d1, dur := timeRange(m.t0, m.t1)
 
 	// Total box width, capped so a tiny pane doesn't produce negative padding.
@@ -86,8 +114,8 @@ func renderHeader(m meta, width int) string {
 	}
 
 	// Title lives on the top border: ╭─ provider · model ──…──╮
-	titlePlain := fmt.Sprintf("─ %s · %s ", m.provider, m.model)
-	titleStyled := fmt.Sprintf("─ %s%s%s%s · %s ", cBold, m.provider, cReset, cCyan, m.model)
+	titlePlain := fmt.Sprintf("─ %s · %s ", provider, model)
+	titleStyled := fmt.Sprintf("─ %s%s%s%s · %s ", cBold, provider, cReset, cCyan, model)
 	if runewidth.StringWidth(titlePlain) > inner {
 		titleStyled = truncate.String(titleStyled, uint(inner))
 		titlePlain = truncate.String(titlePlain, uint(inner))
@@ -100,9 +128,9 @@ func renderHeader(m meta, width int) string {
 	// 📁 cwd (+ branch)
 	cwdPlain := "📁 " + cwd
 	cwdStyled := "📁 " + cwd
-	if m.branch != "" && m.branch != "HEAD" {
-		cwdPlain += "  ⎇ " + m.branch
-		cwdStyled += fmt.Sprintf("  %s⎇ %s%s", cDim, m.branch, cReset)
+	if branch != "" && branch != "HEAD" {
+		cwdPlain += "  ⎇ " + branch
+		cwdStyled += fmt.Sprintf("  %s⎇ %s%s", cDim, branch, cReset)
 	}
 
 	// 🕐 time range
@@ -112,9 +140,9 @@ func renderHeader(m meta, width int) string {
 	// 💬 counts (+ version)
 	msgPlain := fmt.Sprintf("💬 %d user · %d assistant", m.nUser, m.nAsst)
 	msgStyled := msgPlain
-	if m.verLine != "" {
-		msgPlain += "   " + m.verLine
-		msgStyled += fmt.Sprintf("   %s%s%s", cDim, m.verLine, cReset)
+	if verLine != "" {
+		msgPlain += "   " + verLine
+		msgStyled += fmt.Sprintf("   %s%s%s", cDim, verLine, cReset)
 	}
 
 	var b strings.Builder
