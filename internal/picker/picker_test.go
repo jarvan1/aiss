@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/jarvan1/aiss/internal/session"
 )
 
@@ -232,6 +233,24 @@ func TestStalePreviewRequestIsDiscarded(t *testing.T) {
 	_, cmd := m.Update(stale)
 	if cmd != nil {
 		t.Fatal("superseded preview request should not start a load")
+	}
+}
+
+func TestViewLeavesLastTerminalColumnUnused(t *testing.T) {
+	m := newTestPicker()
+	m.refilter()
+	m.width, m.height = 100, 30
+	m.del = func(session.Session) error { return nil }
+	m.previewText = strings.Repeat("一段很长的预览文字\n", 40)
+
+	view := m.View()
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("view height = %d, exceeds terminal height %d", got, m.height)
+	}
+	for i, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got >= m.width {
+			t.Fatalf("line %d width = %d, must stay below terminal width %d", i+1, got, m.width)
+		}
 	}
 }
 

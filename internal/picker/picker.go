@@ -132,17 +132,26 @@ func (m *picker) bodyHeight() int {
 	return m.height - 1 // one row for the input line
 }
 
+// renderWidth leaves the terminal's last column unused. Some embedded
+// terminals immediately auto-wrap when a glyph is written into that column;
+// Bubble Tea then emits its own CRLF and the extra line gradually scrolls the
+// search prompt off-screen, leaving stale cursor markers behind.
+func (m *picker) renderWidth() int {
+	return max(0, m.width-1)
+}
+
 // paneWidths returns the same layout dimensions View uses. Keeping this in one
 // place also lets the async preview loader use the exact render width.
 func (m *picker) paneWidths() (leftW, rightW int, showPreview bool) {
-	leftW = m.width * 45 / 100
+	usableW := m.renderWidth()
+	leftW = usableW * 45 / 100
 	if leftW < 24 {
 		leftW = 24
 	}
-	if leftW > m.width {
-		leftW = m.width
+	if leftW > usableW {
+		leftW = usableW
 	}
-	rightW = m.width - leftW - 1 // 1 col for the divider
+	rightW = usableW - leftW - 1 // 1 col for the divider
 	return leftW, rightW, rightW >= 12
 }
 
@@ -420,7 +429,7 @@ func (m *picker) topLine() string {
 	// too narrow to fit it without crowding the input.
 	if m.del != nil && m.width > 0 {
 		hint := hintStyle.Render(deleteHint)
-		gap := m.width - lipgloss.Width(in) - lipgloss.Width(hint)
+		gap := m.renderWidth() - lipgloss.Width(in) - lipgloss.Width(hint)
 		if gap >= 2 {
 			return in + strings.Repeat(" ", gap) + hint
 		}
