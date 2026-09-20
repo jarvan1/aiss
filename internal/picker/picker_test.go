@@ -1,12 +1,15 @@
 package picker
 
 import (
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jarvan1/aiss/internal/session"
+	"github.com/muesli/termenv"
 )
 
 func TestMatchProvider(t *testing.T) {
@@ -278,6 +281,38 @@ func TestViewKeepsStyledPreviewTitleLine(t *testing.T) {
 	lines := strings.Split(view, "\n")
 	if len(lines) < 2 || !strings.Contains(lines[1], "codex-auto-review") {
 		t.Fatalf("first preview row lost its styled title: %q", view)
+	}
+}
+
+func TestUseRendererKeepsSelectionStyledWhenStdoutIsCaptured(t *testing.T) {
+	previous := lipgloss.DefaultRenderer()
+	t.Cleanup(func() { useRenderer(previous) })
+
+	// A shell widget captures stdout, so Lipgloss's process-wide default would
+	// otherwise be the no-style ASCII profile.
+	captured := lipgloss.NewRenderer(io.Discard)
+	captured.SetColorProfile(termenv.Ascii)
+	lipgloss.SetDefaultRenderer(captured)
+
+	// Bubble Tea renders to the controlling terminal instead. Bind styles to a
+	// renderer representing that output and verify both our selected row and
+	// the text input cursor retain terminal attributes.
+	terminal := lipgloss.NewRenderer(io.Discard)
+	terminal.SetColorProfile(termenv.ANSI)
+	useRenderer(terminal)
+
+	m := newTestPicker()
+	m.refilter()
+	m.width, m.height = 100, 10
+	if view := m.View(); !strings.Contains(view, "\x1b[1;7m") {
+		t.Fatalf("selected row lost reverse-video styling: %q", view)
+	}
+
+	ti := textinput.New()
+	ti.Focus()
+	ti.Cursor.Blink = false
+	if view := ti.View(); !strings.Contains(view, "\x1b[7m") {
+		t.Fatalf("text input cursor lost reverse-video styling: %q", view)
 	}
 }
 

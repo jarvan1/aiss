@@ -35,6 +35,19 @@ var (
 	hintStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))            // red key hint
 )
 
+// useRenderer binds every Lipgloss style, including styles created later by
+// bubbles/textinput, to the terminal Bubble Tea actually draws on. Shell
+// widgets capture stdout to obtain the selected resume command, so the default
+// Lipgloss renderer otherwise sees a pipe, disables terminal attributes, and
+// turns the highlighted row into a bare ">" marker.
+func useRenderer(r *lipgloss.Renderer) {
+	lipgloss.SetDefaultRenderer(r)
+	cursorStyle = r.NewStyle().Bold(true).Reverse(true)
+	confirmStyle = r.NewStyle().Bold(true).Foreground(lipgloss.Color("1"))
+	statusStyle = r.NewStyle().Foreground(lipgloss.Color("2"))
+	hintStyle = r.NewStyle().Foreground(lipgloss.Color("1"))
+}
+
 // deleteHint is the shortcut reminder shown at the right of the search line.
 const deleteHint = "Ctrl+D delete"
 
@@ -510,6 +523,20 @@ func (m *picker) View() string {
 // bool is false if the user aborted (Esc/Ctrl-C) or nothing matched. del, if
 // non-nil, enables Ctrl-D to delete the highlighted session from disk.
 func Pick(sessions []session.Session, query string, del func(session.Session) error) (session.Session, bool) {
+	// Select the controlling terminal before creating any styles. In shell
+	// widgets stdout is a captured pipe, while /dev/tty (or CONOUT$) is the real
+	// interactive output and must drive Lipgloss capability detection.
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	tuiOut := os.Stderr
+	if in, out, closeConsole, ok := openConsole(); ok {
+		defer closeConsole()
+		tuiOut = out
+		opts = append(opts, tea.WithInput(in), tea.WithOutput(out))
+	} else {
+		opts = append(opts, tea.WithOutput(tuiOut))
+	}
+	useRenderer(lipgloss.NewRenderer(tuiOut))
+
 	ti := textinput.New()
 	ti.Prompt = "ai-sessions ❯ "
 	ti.SetValue(query)
@@ -536,22 +563,11 @@ func Pick(sessions []session.Session, query string, del func(session.Session) er
 	// stdout would be invisible and, on Windows, the inherited stdin carries no
 	// key events. openConsole grabs /dev/tty (POSIX) or CONIN$/CONOUT$ (Windows);
 	// both input and output must go there. Falls back to stderr if unavailable.
-	opts := []tea.ProgramOption{tea.WithAltScreen()}
-	if in, out, closeConsole, ok := openConsole(); ok {
-		defer closeConsole()
-		opts = append(opts, tea.WithInput(in), tea.WithOutput(out))
-		// On Windows the picker often draws on a console handle bubbletea can't
-		// deliver resize events for, so it polls the output size instead (no-op
-		// on POSIX, which gets native resize events). enablePolling is true only
-		// on Windows and only when out is a real terminal.
-		if enablePolling && term.IsTerminal(out.Fd()) {
-			m.pollFd, m.pollOn = out.Fd(), true
-		}
-	} else {
-		opts = append(opts, tea.WithOutput(os.Stderr))
-		if enablePolling && term.IsTerminal(os.Stderr.Fd()) {
-			m.pollFd, m.pollOn = os.Stderr.Fd(), true
-		}
+	// On Windows the picker often draws on a console handle bubbletea can't
+	// deliver resize events for, so we poll the output size instead (no-op on
+	// POSIX, which gets native resize events).
+	if enablePolling && term.IsTerminal(tuiOut.Fd()) {
+		m.pollFd, m.pollOn = tuiOut.Fd(), true
 	}
 
 	res, err := tea.NewProgram(m, opts...).Run()
