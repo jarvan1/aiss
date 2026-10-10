@@ -18,6 +18,12 @@ type Plan struct {
 	name string   // executable
 	args []string // arguments
 	note string   // human-facing note (e.g. gemini has no resume-by-id)
+	env  []envVar // per-session environment (e.g. Codex profile homes)
+}
+
+type envVar struct {
+	name  string
+	value string
 }
 
 // Note returns the human-facing note, if any (e.g. gemini has no resume-by-id).
@@ -31,19 +37,30 @@ func PlanResume(s session.Session) (Plan, error) {
 	}
 	switch s.Provider {
 	case "claude":
-		return Plan{dir, "claude", []string{"--resume", s.ID}, ""}, nil
+		return Plan{dir: dir, name: "claude", args: []string{"--resume", s.ID}}, nil
 	case "codex":
 		args := []string{"resume", s.ID}
 		if model := codexModel(s.File); model != "" {
 			args = append(args, "-m", model)
 		}
-		return Plan{dir, "codex", args, ""}, nil
+		return Plan{dir: dir, name: "codex", args: args, env: codexEnv(s)}, nil
 	case "copilot":
-		return Plan{dir, "copilot", []string{"--resume=" + s.ID}, ""}, nil
+		return Plan{dir: dir, name: "copilot", args: []string{"--resume=" + s.ID}}, nil
 	case "gemini":
-		return Plan{dir, "gemini", nil, "gemini-cli has no resume-by-id; opening in the directory"}, nil
+		return Plan{dir: dir, name: "gemini", note: "gemini-cli has no resume-by-id; opening in the directory"}, nil
 	}
 	return Plan{}, fmt.Errorf("unknown provider %q", s.Provider)
+}
+
+func codexEnv(s session.Session) []envVar {
+	var env []envVar
+	if s.CodexHome != "" {
+		env = append(env, envVar{"CODEX_HOME", s.CodexHome})
+	}
+	if s.CodexSQLiteHome != "" {
+		env = append(env, envVar{"CODEX_SQLITE_HOME", s.CodexSQLiteHome})
+	}
+	return env
 }
 
 // codexModel reads the model the codex session was recorded with, so resume
@@ -78,13 +95,39 @@ func (p Plan) Run() error {
 	}
 	cmd := exec.Command(p.name, p.args...)
 	cmd.Dir = p.dir
+	cmd.Env = mergeEnv(os.Environ(), p.env)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd.Run()
 }
 
+func mergeEnv(base []string, overrides []envVar) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+	replace := make(map[string]string, len(overrides))
+	for _, item := range overrides {
+		replace[item.name] = item.value
+	}
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, item := range base {
+		name, _, _ := strings.Cut(item, "=")
+		if _, ok := replace[name]; !ok {
+			out = append(out, item)
+		}
+	}
+	for _, item := range overrides {
+		out = append(out, item.name+"="+item.value)
+	}
+	return out
+}
+
 // Shell renders the plan as a copy-pasteable shell command (for --print).
 func (p Plan) Shell() string {
-	cmd := fmt.Sprintf("cd %s && %s", shellQuote(p.dir), p.name)
+	cmd := fmt.Sprintf("cd %s && ", shellQuote(p.dir))
+	for _, item := range p.env {
+		cmd += item.name + "=" + shellQuote(item.value) + " "
+	}
+	cmd += p.name
 	for _, a := range p.args {
 		cmd += " " + shellQuote(a)
 	}
@@ -96,11 +139,24 @@ func (p Plan) Shell() string {
 // finally block so the caller's directory is always restored.
 func (p Plan) PowerShell() string {
 	var b strings.Builder
-	b.WriteString("Push-Location " + pwshQuote(p.dir) + "; try { & " + pwshQuote(p.name))
+	b.WriteString("Push-Location " + pwshQuote(p.dir) + "; ")
+	for _, item := range p.env {
+		b.WriteString("$__aiss_had_" + item.name + " = Test-Path Env:" + item.name + "; ")
+		b.WriteString("$__aiss_old_" + item.name + " = $env:" + item.name + "; ")
+	}
+	b.WriteString("try { ")
+	for _, item := range p.env {
+		b.WriteString("$env:" + item.name + " = " + pwshQuote(item.value) + "; ")
+	}
+	b.WriteString("& " + pwshQuote(p.name))
 	for _, a := range p.args {
 		b.WriteString(" " + pwshQuote(a))
 	}
-	b.WriteString(" } finally { Pop-Location }")
+	b.WriteString(" } finally { ")
+	for _, item := range p.env {
+		b.WriteString("if ($__aiss_had_" + item.name + ") { $env:" + item.name + " = $__aiss_old_" + item.name + " } else { Remove-Item Env:" + item.name + " -ErrorAction SilentlyContinue }; ")
+	}
+	b.WriteString("Pop-Location }")
 	return b.String()
 }
 

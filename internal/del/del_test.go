@@ -36,9 +36,11 @@ func TestBuildPlanClaudeIncludesSidecars(t *testing.T) {
 func TestBuildPlanCodexPrefersNativeCmd(t *testing.T) {
 	home := session.Home()
 	s := session.Session{
-		Provider: "codex",
-		ID:       "uuid-9",
-		File:     filepath.Join(home, ".codex", "sessions", "2026", "07", "01", "rollout-x.jsonl"),
+		Provider:        "codex",
+		ID:              "uuid-9",
+		File:            filepath.Join(home, ".codex", "sessions", "2026", "07", "01", "rollout-x.jsonl"),
+		CodexHome:       filepath.Join(home, ".codex-work"),
+		CodexSQLiteHome: filepath.Join(home, ".codex"),
 	}
 	p, err := BuildPlan(s, session.Dirs{})
 	if err != nil {
@@ -49,6 +51,10 @@ func TestBuildPlanCodexPrefersNativeCmd(t *testing.T) {
 	}
 	if len(p.Paths()) != 1 {
 		t.Errorf("codex should also remove the rollout file, got %v", p.Paths())
+	}
+	wantEnv := []string{"CODEX_HOME=" + filepath.Join(home, ".codex-work"), "CODEX_SQLITE_HOME=" + filepath.Join(home, ".codex")}
+	if strings.Join(p.NativeEnv(), "|") != strings.Join(wantEnv, "|") {
+		t.Errorf("native env = %v, want %v", p.NativeEnv(), wantEnv)
 	}
 }
 

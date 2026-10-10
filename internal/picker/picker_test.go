@@ -88,6 +88,120 @@ func TestRefilterProviderTermExcludesOthers(t *testing.T) {
 	}
 }
 
+func TestCodexProfileAppearsInRowsAndCanBeFiltered(t *testing.T) {
+	m := newTestPicker()
+	m.sessions[1].Profile = "personal"
+	m.sessions[2].Profile = "work"
+	for i, s := range m.sessions {
+		m.targets[i] = rowLabel(s)
+	}
+	if !strings.Contains(m.targets[1], "codex:personal") || !strings.Contains(m.targets[2], "codex:work") {
+		t.Fatalf("profile labels missing: %q / %q", m.targets[1], m.targets[2])
+	}
+	m.input.SetValue("codex work")
+	m.refilter()
+	if len(m.filtered) != 1 || m.sessions[m.filtered[0]].Profile != "work" {
+		t.Fatalf("filtered sessions = %#v", m.filtered)
+	}
+}
+
+func TestCodexEnterOpensProfileChoiceWithDetectedProfileSelected(t *testing.T) {
+	m := newTestPicker()
+	m.profiles = []session.CodexProfile{
+		{Name: "personal", Home: "/profiles/personal", SQLiteHome: "/runtime"},
+		{Name: "work", Home: "/profiles/work", SQLiteHome: "/runtime"},
+	}
+	m.sessions[1].Profile = "work"
+	m.sessions[1].CodexHome = "/profiles/work"
+	m.refilter()
+	m.cursor = 1
+
+	m.Update(keyMsg("enter"))
+	if !m.choosingProfile {
+		t.Fatal("Enter on Codex should open the profile picker")
+	}
+	if m.profileCursor != 1 {
+		t.Fatalf("profile cursor = %d, want detected work profile at 1", m.profileCursor)
+	}
+	if m.chosen != -1 {
+		t.Fatalf("session was chosen before profile confirmation: %d", m.chosen)
+	}
+}
+
+func TestProfileChoiceCanOverrideResumeEnvironment(t *testing.T) {
+	m := newTestPicker()
+	m.profiles = []session.CodexProfile{
+		{Name: "personal", Home: "/profiles/personal", SQLiteHome: "/runtime"},
+		{Name: "work", Home: "/profiles/work", SQLiteHome: "/runtime"},
+	}
+	m.sessions[1].Profile = "personal"
+	m.sessions[1].CodexHome = "/profiles/personal"
+	m.refilter()
+	m.cursor = 1
+	m.Update(keyMsg("enter"))
+	m.Update(keyMsg("down"))
+	m.Update(keyMsg("enter"))
+
+	if m.chosen != 1 {
+		t.Fatalf("chosen = %d, want session index 1", m.chosen)
+	}
+	got := m.sessions[m.chosen]
+	if got.Profile != "work" || got.CodexHome != "/profiles/work" || got.CodexSQLiteHome != "/runtime" {
+		t.Fatalf("chosen session profile = %#v", got)
+	}
+}
+
+func TestProfileChoiceEscReturnsToSessionList(t *testing.T) {
+	m := newTestPicker()
+	m.profiles = []session.CodexProfile{{Name: "personal"}, {Name: "work"}}
+	m.refilter()
+	m.cursor = 1
+	m.Update(keyMsg("enter"))
+	m.Update(keyMsg("esc"))
+	if m.choosingProfile {
+		t.Fatal("Esc should return to the session list")
+	}
+	if m.chosen != -1 {
+		t.Fatalf("Esc from profile choice should not choose a session: %d", m.chosen)
+	}
+}
+
+func TestNonCodexEnterDoesNotOpenProfileChoice(t *testing.T) {
+	m := newTestPicker()
+	m.profiles = []session.CodexProfile{{Name: "personal"}, {Name: "work"}}
+	m.refilter()
+	m.cursor = 0 // Claude
+	m.Update(keyMsg("enter"))
+	if m.choosingProfile {
+		t.Fatal("non-Codex sessions must not open the profile picker")
+	}
+	if m.chosen != 0 {
+		t.Fatalf("chosen = %d, want Claude session 0", m.chosen)
+	}
+}
+
+func TestProfileChoiceViewKeepsPreviewAndShowsDetectedProfile(t *testing.T) {
+	m := newTestPicker()
+	m.profiles = []session.CodexProfile{
+		{Name: "personal", Home: "/profiles/personal"},
+		{Name: "work", Home: "/profiles/work"},
+	}
+	m.sessions[1].Profile = "work"
+	m.sessions[1].CodexHome = "/profiles/work"
+	m.refilter()
+	m.cursor = 1
+	m.width, m.height = 100, 10
+	m.previewText = "existing preview"
+	m.Update(keyMsg("enter"))
+
+	view := m.View()
+	for _, want := range []string{"codex profile", "personal", "work", "(detected)", "existing preview"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("profile view missing %q: %q", want, view)
+		}
+	}
+}
+
 func TestDeleteConfirmDropsRow(t *testing.T) {
 	m := newTestPicker()
 	var deleted []session.Session
@@ -326,6 +440,14 @@ func keyMsg(s string) tea.KeyMsg {
 	switch s {
 	case "ctrl+d":
 		return tea.KeyMsg{Type: tea.KeyCtrlD}
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}

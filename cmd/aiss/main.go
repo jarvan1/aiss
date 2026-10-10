@@ -86,9 +86,13 @@ func main() {
 	}
 
 	deleteFn := func(s session.Session) error { return del.Delete(s, dirs) }
-	s, ok := picker.Pick(sessions, query, deleteFn)
+	profiles := session.SelectableCodexProfiles(dirs.CodexProfiles)
+	s, ok := picker.Pick(sessions, query, profiles, deleteFn)
 	if !ok {
 		return // user aborted
+	}
+	if err := session.RememberCodexProfile(s); err != nil {
+		fmt.Fprintln(os.Stderr, "aiss: warning: could not remember Codex profile:", err)
 	}
 
 	plan, err := resume.PlanResume(s)
@@ -134,7 +138,7 @@ func cmdScan() {
 		if prev == "" {
 			prev = "(no prompt)"
 		}
-		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", s.Provider, s.ID, session.Tilde(s.Cwd), session.TruncRunes(prev, 100), s.File)
+		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", s.ProviderLabel(), s.ID, session.Tilde(s.Cwd), session.TruncRunes(prev, 100), s.File)
 	}
 }
 
@@ -157,5 +161,6 @@ const usage = `aiss — fuzzy picker over AI CLI session histories
 
 Providers: claude, codex, copilot, gemini
 Env: AISS_CLAUDE_DIR, AISS_CODEX_DIR, AISS_COPILOT_DIR, AISS_GEMINI_DIR,
+     AISS_CODEX_HOMES, AISS_CODEX_SQLITE_HOME,
      AISS_SHOW_MISSING=1 (keep sessions whose dir was deleted)
 `

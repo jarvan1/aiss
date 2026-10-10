@@ -130,7 +130,7 @@ tools) and dispatches resume to the matching CLI:
 | Provider | Scanned path | Resume |
 |----------|--------------|--------|
 | Claude   | `~/.claude/projects/<dir>/<uuid>.jsonl` | `claude --resume <uuid>` |
-| Codex    | `~/.codex/sessions/**/rollout-*.jsonl`  | `codex resume <uuid> [-m model]` |
+| Codex    | `<sqlite-home>/sessions/**/rollout-*.jsonl` and profile homes | `CODEX_HOME=… CODEX_SQLITE_HOME=… codex resume <uuid> [-m model]` |
 | Copilot  | `~/.copilot/session-state/<uuid>/events.jsonl` | `copilot --resume=<uuid>` |
 | Gemini   | `~/.gemini/tmp/<hash>/logs.json` (experimental) | opens in the dir (no resume-by-id) |
 
@@ -141,12 +141,38 @@ on `PATH` to *resume*; browsing and previewing work without any of them.
 Sessions whose original directory no longer exists are hidden — set
 `AISS_SHOW_MISSING=1` to keep them.
 
+### Multiple Codex homes
+
+`aiss` automatically discovers `~/.codex-*` config/auth homes such as
+`~/.codex-work` and `~/.codex-personal`, plus the default `~/.codex`. When
+multiple homes share one SQLite/session directory, it matches each rollout's
+`creator_account_id` to the corresponding home and labels it in the picker as
+`codex:work` or `codex:personal`. Resume and delete commands receive both the
+originating `CODEX_HOME` and the shared `CODEX_SQLITE_HOME`.
+
+After selecting a Codex session, a second in-place picker lets you choose which
+profile should resume it. The detected originating profile is preselected;
+press Enter to accept it, choose another profile with the arrow keys, or press
+Esc to return to the session list.
+
+Older rollouts may not contain an account ID. They still use the same profile
+picker; after the first choice, `aiss` remembers the session-to-profile mapping
+in its own config and preselects it on later runs. Codex session files and its
+SQLite database are not changed.
+
+For non-standard locations, set `AISS_CODEX_HOMES` to an OS path list (`:` on
+macOS/Linux, `;` on Windows) and optionally set `AISS_CODEX_SQLITE_HOME`. Your
+existing `codex-w` / `codex-p` functions do not need to change.
+
 ## Configuration
 
 | Variable | Default |
 |----------|---------|
 | `AISS_CLAUDE_DIR`  | `~/.claude/projects` |
 | `AISS_CODEX_DIR`   | `~/.codex/sessions` |
+| `AISS_CODEX_HOMES` | auto-detect `CODEX_HOME`, `~/.codex-*`, and `~/.codex` |
+| `AISS_CODEX_SQLITE_HOME` | `CODEX_SQLITE_HOME`, otherwise `~/.codex` |
+| `AISS_CONFIG_DIR`  | OS user config directory + `aiss` |
 | `AISS_COPILOT_DIR` | `~/.copilot/session-state` |
 | `AISS_GEMINI_DIR`  | `~/.gemini/tmp` |
 | `AISS_SHOW_MISSING`| unset (set to `1` to keep deleted-dir sessions) |

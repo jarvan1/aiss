@@ -48,6 +48,9 @@ type turn struct {
 // width is the column budget for the header box rules; <=0 uses a default.
 func Preview(s session.Session, width int) string {
 	m, turns := readTranscript(s)
+	if s.Profile != "" {
+		m.provider = s.ProviderLabel()
+	}
 	var b strings.Builder
 	b.WriteString(renderHeader(m, width))
 	for _, t := range turns {

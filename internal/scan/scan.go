@@ -16,7 +16,7 @@ import (
 func Scan(d session.Dirs, keepMissing bool) []session.Session {
 	var out []session.Session
 	out = append(out, scanClaude(d.Claude, keepMissing)...)
-	out = append(out, scanCodex(d.Codex, keepMissing)...)
+	out = append(out, scanCodexHomes(d, keepMissing)...)
 	out = append(out, scanCopilot(d.Copilot, keepMissing)...)
 	out = append(out, scanGemini(d.Gemini)...)
 	sort.SliceStable(out, func(i, j int) bool {
@@ -112,9 +112,31 @@ func scanClaude(root string, keepMissing bool) []session.Session {
 	return out
 }
 
-// --- Codex: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl ------------------
+// --- Codex: <sqlite-home>/sessions or <profile-home>/sessions -------------
 
-func scanCodex(root string, keepMissing bool) []session.Session {
+func scanCodexHomes(d session.Dirs, keepMissing bool) []session.Session {
+	var out []session.Session
+	seenRoots := make(map[string]bool)
+	scanRoot := func(root string, fixedProfile *session.CodexProfile) {
+		root = filepath.Clean(root)
+		if root == "." || seenRoots[root] {
+			return
+		}
+		seenRoots[root] = true
+		out = append(out, scanCodex(root, keepMissing, d.CodexProfiles, d.CodexProfileSelections, fixedProfile)...)
+	}
+
+	// Shared SQLite homes store rollouts from multiple config/auth homes in one
+	// sessions tree. creator_account_id associates each rollout with its home.
+	scanRoot(d.Codex, nil)
+	for i := range d.CodexProfiles {
+		profile := &d.CodexProfiles[i]
+		scanRoot(filepath.Join(profile.Home, "sessions"), profile)
+	}
+	return out
+}
+
+func scanCodex(root string, keepMissing bool, profiles []session.CodexProfile, remembered map[string]session.CodexProfileSelection, fixedProfile *session.CodexProfile) []session.Session {
 	var out []session.Session
 	for _, f := range globRecursive(root, "rollout-*.jsonl") {
 		base, ok := mtime(f)
@@ -124,16 +146,17 @@ func scanCodex(root string, keepMissing bool) []session.Session {
 		type line struct {
 			Type    string `json:"type"`
 			Payload struct {
-				Type    string `json:"type"`
-				Role    string `json:"role"`
-				ID      string `json:"id"`
-				Cwd     string `json:"cwd"`
-				Content []struct {
+				Type             string `json:"type"`
+				Role             string `json:"role"`
+				ID               string `json:"id"`
+				Cwd              string `json:"cwd"`
+				CreatorAccountID string `json:"creator_account_id"`
+				Content          []struct {
 					Text string `json:"text"`
 				} `json:"content"`
 			} `json:"payload"`
 		}
-		var id, cwd, prompt string
+		var id, cwd, prompt, creatorAccountID string
 		session.EachLine(f, func(raw []byte) bool {
 			var l line
 			if json.Unmarshal(raw, &l) != nil {
@@ -145,6 +168,9 @@ func scanCodex(root string, keepMissing bool) []session.Session {
 				}
 				if cwd == "" {
 					cwd = l.Payload.Cwd
+				}
+				if creatorAccountID == "" {
+					creatorAccountID = l.Payload.CreatorAccountID
 				}
 			}
 			if prompt == "" && l.Payload.Type == "message" && l.Payload.Role == "user" {
@@ -172,6 +198,32 @@ func scanCodex(root string, keepMissing bool) []session.Session {
 		base.Cwd = cwd
 		base.File = f
 		base.Preview = session.CollapseWS(prompt)
+		base.CodexSQLiteHome = filepath.Dir(root)
+		profile := fixedProfile
+		if profile == nil && creatorAccountID != "" {
+			for i := range profiles {
+				if profiles[i].AccountID != "" && profiles[i].AccountID == creatorAccountID {
+					profile = &profiles[i]
+					break
+				}
+			}
+		}
+		if profile == nil {
+			if selected, ok := remembered[id]; ok {
+				for i := range profiles {
+					if (selected.Home != "" && profiles[i].Home == selected.Home) ||
+						(selected.Home == "" && selected.Name != "" && profiles[i].Name == selected.Name) {
+						profile = &profiles[i]
+						break
+					}
+				}
+			}
+		}
+		if profile != nil {
+			base.Profile = profile.Name
+			base.CodexHome = profile.Home
+			base.CodexSQLiteHome = profile.SQLiteHome
+		}
 		out = append(out, base)
 	}
 	return out

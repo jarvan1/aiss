@@ -22,6 +22,9 @@ type Plan struct {
 	// nativeCmd, if non-empty, is a CLI command tried before removing paths
 	// (e.g. codex delete <id>). A failure is non-fatal: we still remove paths.
 	nativeCmd []string
+	// nativeEnv selects the originating Codex config/auth and shared runtime
+	// state when nativeCmd operates on a Codex session.
+	nativeEnv []string
 	// paths are files or directories to remove (os.RemoveAll). Every entry is an
 	// absolute path that guardOK has already vetted.
 	paths []string
@@ -32,6 +35,9 @@ func (p Plan) Paths() []string { return p.paths }
 
 // NativeCmd returns the native CLI command the plan runs first, if any.
 func (p Plan) NativeCmd() []string { return p.nativeCmd }
+
+// NativeEnv returns environment overrides for the native command.
+func (p Plan) NativeEnv() []string { return p.nativeEnv }
 
 // BuildPlan computes what to remove for a session. dirs supplies the provider
 // scan roots so sidecar paths (e.g. claude's session-env/<uuid>) are derived
@@ -61,6 +67,12 @@ func BuildPlan(s session.Session, dirs session.Dirs) (Plan, error) {
 		// terminal", which would silently leave the index row behind.
 		if s.ID != "" {
 			p.nativeCmd = []string{"codex", "delete", "--force", s.ID}
+			if s.CodexHome != "" {
+				p.nativeEnv = append(p.nativeEnv, "CODEX_HOME="+s.CodexHome)
+			}
+			if s.CodexSQLiteHome != "" {
+				p.nativeEnv = append(p.nativeEnv, "CODEX_SQLITE_HOME="+s.CodexSQLiteHome)
+			}
 		}
 		add(s.File)
 	case "copilot":
@@ -95,7 +107,9 @@ func (p Plan) Run() error {
 		if bin, err := exec.LookPath(p.nativeCmd[0]); err == nil {
 			// Best-effort; codex delete prompts nothing for a known id. Ignore a
 			// non-zero exit — we still remove the file below.
-			_ = exec.Command(bin, p.nativeCmd[1:]...).Run()
+			cmd := exec.Command(bin, p.nativeCmd[1:]...)
+			cmd.Env = mergeEnv(os.Environ(), p.nativeEnv)
+			_ = cmd.Run()
 		}
 	}
 	for _, path := range p.paths {
@@ -104,6 +118,25 @@ func (p Plan) Run() error {
 		}
 	}
 	return nil
+}
+
+func mergeEnv(base, overrides []string) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+	replace := make(map[string]bool, len(overrides))
+	for _, item := range overrides {
+		name, _, _ := strings.Cut(item, "=")
+		replace[name] = true
+	}
+	out := make([]string, 0, len(base)+len(overrides))
+	for _, item := range base {
+		name, _, _ := strings.Cut(item, "=")
+		if !replace[name] {
+			out = append(out, item)
+		}
+	}
+	return append(out, overrides...)
 }
 
 // guardOK is the safety gate: a path must be absolute, live under the user's

@@ -25,7 +25,7 @@ func rowLabel(s session.Session) string {
 	if prev == "" {
 		prev = "(no prompt)"
 	}
-	return fmt.Sprintf("%-7s %-34.34s %s", s.Provider, session.Tilde(s.Cwd), prev)
+	return fmt.Sprintf("%-15.15s %-26.26s %s", s.ProviderLabel(), session.Tilde(s.Cwd), prev)
 }
 
 var (
@@ -80,6 +80,7 @@ const previewDebounce = 75 * time.Millisecond
 // picker is the bubbletea model backing Pick.
 type picker struct {
 	sessions []session.Session
+	profiles []session.CodexProfile
 	targets  []string // rowLabel per session, used for both search and display
 	filtered []int    // indices into sessions, in match order
 	input    textinput.Model
@@ -95,6 +96,10 @@ type picker struct {
 	confirming bool       // awaiting y/N on a pending delete
 	pendingRow int        // index into filtered marked for deletion
 	status     string     // transient message shown on the prompt line
+
+	choosingProfile bool // second-stage Codex profile selector is active
+	profileCursor   int  // highlighted entry in profiles
+	profileOffset   int  // first visible profile when the list is taller than the pane
 
 	previewer      previewFunc
 	previewCache   map[previewKey]string
@@ -355,11 +360,72 @@ func (m *picker) fixScroll() {
 	}
 }
 
+// beginProfileChoice enters the second picker stage for Codex sessions when
+// more than one configuration home is available. The originating profile is
+// preselected, but the user can deliberately resume with another account.
+func (m *picker) beginProfileChoice() bool {
+	if len(m.filtered) == 0 || len(m.profiles) < 2 {
+		return false
+	}
+	s := m.sessions[m.filtered[m.cursor]]
+	if s.Provider != "codex" {
+		return false
+	}
+	m.choosingProfile = true
+	m.profileCursor, m.profileOffset = 0, 0
+	for i, profile := range m.profiles {
+		if (s.CodexHome != "" && profile.Home == s.CodexHome) ||
+			(s.CodexHome == "" && s.Profile != "" && profile.Name == s.Profile) {
+			m.profileCursor = i
+			break
+		}
+	}
+	m.fixProfileScroll()
+	return true
+}
+
+func (m *picker) moveProfile(d int) {
+	if len(m.profiles) == 0 {
+		return
+	}
+	m.profileCursor = min(max(m.profileCursor+d, 0), len(m.profiles)-1)
+	m.fixProfileScroll()
+}
+
+func (m *picker) fixProfileScroll() {
+	body := m.bodyHeight()
+	if body < 1 {
+		return
+	}
+	if m.profileCursor < m.profileOffset {
+		m.profileOffset = m.profileCursor
+	}
+	if m.profileCursor >= m.profileOffset+body {
+		m.profileOffset = m.profileCursor - body + 1
+	}
+	if m.profileOffset < 0 {
+		m.profileOffset = 0
+	}
+}
+
+func (m *picker) chooseProfile() {
+	if len(m.filtered) == 0 || m.profileCursor < 0 || m.profileCursor >= len(m.profiles) {
+		return
+	}
+	si := m.filtered[m.cursor]
+	profile := m.profiles[m.profileCursor]
+	m.sessions[si].Profile = profile.Name
+	m.sessions[si].CodexHome = profile.Home
+	m.sessions[si].CodexSQLiteHome = profile.SQLiteHome
+	m.chosen = si
+}
+
 func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.fixScroll()
+		m.fixProfileScroll()
 		return m, m.queuePreview()
 	case resizeTickMsg:
 		// Poll the size and re-arm the tick. pollSize only emits a
@@ -384,6 +450,35 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		// Profile selection is a self-contained second stage. Esc returns to the
+		// session list without closing the TUI; Enter applies the selected Codex
+		// environment and completes the original selection.
+		if m.choosingProfile {
+			switch msg.String() {
+			case "ctrl+c":
+				m.chosen = -1
+				return m, tea.Quit
+			case "esc":
+				m.choosingProfile = false
+				return m, m.fullRepaint()
+			case "enter":
+				m.chooseProfile()
+				return m, tea.Quit
+			case "up", "ctrl+p", "ctrl+k":
+				old := m.profileCursor
+				m.moveProfile(-1)
+				if m.profileCursor != old {
+					return m, m.fullRepaint()
+				}
+			case "down", "ctrl+n", "ctrl+j":
+				old := m.profileCursor
+				m.moveProfile(1)
+				if m.profileCursor != old {
+					return m, m.fullRepaint()
+				}
+			}
+			return m, nil
+		}
 		// While confirming a delete, keys answer y/N and nothing else.
 		if m.confirming {
 			switch msg.String() {
@@ -402,6 +497,9 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "enter":
 			if len(m.filtered) > 0 {
+				if m.beginProfileChoice() {
+					return m, m.fullRepaint()
+				}
 				m.chosen = m.filtered[m.cursor]
 			}
 			return m, tea.Quit
@@ -442,6 +540,15 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // topLine is the first row: the search input, or a delete confirm/status line.
 func (m *picker) topLine() string {
+	if m.choosingProfile {
+		title := "codex profile ❯"
+		hint := "↑/↓ choose · Enter resume · Esc back"
+		gap := m.renderWidth() - lipgloss.Width(title) - lipgloss.Width(hint)
+		if gap >= 2 {
+			return title + strings.Repeat(" ", gap) + hintStyle.Render(hint)
+		}
+		return title
+	}
 	if m.confirming && m.pendingRow >= 0 && m.pendingRow < len(m.filtered) {
 		s := m.sessions[m.filtered[m.pendingRow]]
 		return confirmStyle.Render(fmt.Sprintf("delete %s  %s ?  (y/N)", s.Provider, session.Tilde(s.Cwd)))
@@ -463,6 +570,38 @@ func (m *picker) topLine() string {
 	return in
 }
 
+func (m *picker) profileRows(body, width int) []string {
+	rows := make([]string, body)
+	var selected session.Session
+	if len(m.filtered) > 0 {
+		selected = m.sessions[m.filtered[m.cursor]]
+	}
+	for i := 0; i < body; i++ {
+		idx := m.profileOffset + i
+		if idx >= len(m.profiles) {
+			rows[i] = strings.Repeat(" ", width)
+			continue
+		}
+		profile := m.profiles[idx]
+		marker := ""
+		if (selected.CodexHome != "" && selected.CodexHome == profile.Home) ||
+			(selected.CodexHome == "" && selected.Profile != "" && selected.Profile == profile.Name) {
+			marker = " (detected)"
+		}
+		label := fmt.Sprintf("%-12.12s%s %s", profile.Name, marker, session.Tilde(profile.Home))
+		line := "  " + label
+		if idx == m.profileCursor {
+			line = "> " + label
+		}
+		line = padLine(line, width)
+		if idx == m.profileCursor {
+			line = cursorStyle.Render(line)
+		}
+		rows[i] = line
+	}
+	return rows
+}
+
 func padLine(line string, width int) string {
 	line = truncate.String(line, uint(max(0, width)))
 	if pad := width - lipgloss.Width(line); pad > 0 {
@@ -480,22 +619,27 @@ func (m *picker) View() string {
 	leftW, rightW, showPreview := m.paneWidths()
 
 	// --- list (left) ---
-	rows := make([]string, body)
-	for i := 0; i < body; i++ {
-		idx := m.offset + i
-		if idx >= len(m.filtered) {
-			rows[i] = strings.Repeat(" ", leftW)
-			continue
+	var rows []string
+	if m.choosingProfile {
+		rows = m.profileRows(body, leftW)
+	} else {
+		rows = make([]string, body)
+		for i := 0; i < body; i++ {
+			idx := m.offset + i
+			if idx >= len(m.filtered) {
+				rows[i] = strings.Repeat(" ", leftW)
+				continue
+			}
+			line := "  " + m.targets[m.filtered[idx]]
+			if idx == m.cursor {
+				line = "> " + m.targets[m.filtered[idx]]
+			}
+			line = padLine(line, leftW)
+			if idx == m.cursor {
+				line = cursorStyle.Render(line)
+			}
+			rows[i] = line
 		}
-		line := "  " + m.targets[m.filtered[idx]]
-		if idx == m.cursor {
-			line = "> " + m.targets[m.filtered[idx]]
-		}
-		line = padLine(line, leftW)
-		if idx == m.cursor {
-			line = cursorStyle.Render(line)
-		}
-		rows[i] = line
 	}
 
 	if !showPreview {
@@ -521,8 +665,9 @@ func (m *picker) View() string {
 
 // Pick shows the interactive fuzzy finder and returns the chosen session. The
 // bool is false if the user aborted (Esc/Ctrl-C) or nothing matched. del, if
-// non-nil, enables Ctrl-D to delete the highlighted session from disk.
-func Pick(sessions []session.Session, query string, del func(session.Session) error) (session.Session, bool) {
+// non-nil, enables Ctrl-D to delete the highlighted session from disk. When
+// multiple Codex profiles are supplied, Codex selection opens a second stage.
+func Pick(sessions []session.Session, query string, profiles []session.CodexProfile, del func(session.Session) error) (session.Session, bool) {
 	// Select the controlling terminal before creating any styles. In shell
 	// widgets stdout is a captured pipe, while /dev/tty (or CONOUT$) is the real
 	// interactive output and must drive Lipgloss capability detection.
@@ -545,6 +690,7 @@ func Pick(sessions []session.Session, query string, del func(session.Session) er
 
 	m := &picker{
 		sessions:     sessions,
+		profiles:     profiles,
 		input:        ti,
 		chosen:       -1,
 		del:          del,
@@ -578,5 +724,5 @@ func Pick(sessions []session.Session, query string, del func(session.Session) er
 	if fm.chosen < 0 {
 		return session.Session{}, false
 	}
-	return sessions[fm.chosen], true
+	return fm.sessions[fm.chosen], true
 }
