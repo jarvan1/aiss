@@ -66,7 +66,7 @@ func BuildPlan(s session.Session, dirs session.Dirs) (Plan, error) {
 		// delete` refuses with "cannot confirm ... without an interactive
 		// terminal", which would silently leave the index row behind.
 		if s.ID != "" {
-			p.nativeCmd = []string{"codex", "delete", "--force", s.ID}
+			p.nativeCmd = []string{"codex", "--no-daemon", "delete", "--force", s.ID}
 			if s.CodexHome != "" {
 				p.nativeEnv = append(p.nativeEnv, "CODEX_HOME="+s.CodexHome)
 			}

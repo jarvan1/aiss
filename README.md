@@ -153,7 +153,9 @@ originating `CODEX_HOME` and the shared `CODEX_SQLITE_HOME`.
 After selecting a Codex session, a second in-place picker lets you choose which
 profile should resume it. The detected originating profile is preselected;
 press Enter to accept it, choose another profile with the arrow keys, or press
-Esc to return to the session list.
+Esc to return to the session list. Resume and native delete commands use
+`--no-daemon`, matching isolated `codex-w` / `codex-p` shell functions so a
+shared daemon started under one account cannot capture the other profile.
 
 Older rollouts may not contain an account ID. They still use the same profile
 picker; after the first choice, `aiss` remembers the session-to-profile mapping

@@ -39,7 +39,10 @@ func PlanResume(s session.Session) (Plan, error) {
 	case "claude":
 		return Plan{dir: dir, name: "claude", args: []string{"--resume", s.ID}}, nil
 	case "codex":
-		args := []string{"resume", s.ID}
+		// Profiles intentionally share SQLite session state but not auth. Avoid
+		// the shared app-server daemon so a daemon started by one CODEX_HOME does
+		// not keep serving commands selected for another account.
+		args := []string{"--no-daemon", "resume", s.ID}
 		if model := codexModel(s.File); model != "" {
 			args = append(args, "-m", model)
 		}

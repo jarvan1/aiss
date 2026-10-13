@@ -39,7 +39,7 @@ func TestCodexProfileEnvironmentIsRenderedAndRestored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantShell := "( cd '/tmp/project' && CODEX_HOME='/Users/test/.codex-work' CODEX_SQLITE_HOME='/Users/test/.codex' codex 'resume' 'uuid-work' )"
+	wantShell := "( cd '/tmp/project' && CODEX_HOME='/Users/test/.codex-work' CODEX_SQLITE_HOME='/Users/test/.codex' codex '--no-daemon' 'resume' 'uuid-work' )"
 	if got := p.Shell(); got != wantShell {
 		t.Fatalf("shell:\n got %q\nwant %q", got, wantShell)
 	}
@@ -48,7 +48,7 @@ func TestCodexProfileEnvironmentIsRenderedAndRestored(t *testing.T) {
 	for _, want := range []string{
 		"$env:CODEX_HOME = '/Users/test/.codex-work'",
 		"$env:CODEX_SQLITE_HOME = '/Users/test/.codex'",
-		"& 'codex' 'resume' 'uuid-work'",
+		"& 'codex' '--no-daemon' 'resume' 'uuid-work'",
 		"$env:CODEX_HOME = $__aiss_old_CODEX_HOME",
 		"Remove-Item Env:CODEX_SQLITE_HOME -ErrorAction SilentlyContinue",
 	} {

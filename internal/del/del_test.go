@@ -46,8 +46,8 @@ func TestBuildPlanCodexPrefersNativeCmd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := p.NativeCmd(); len(got) != 4 || got[0] != "codex" || got[1] != "delete" || got[2] != "--force" || got[3] != "uuid-9" {
-		t.Errorf("native cmd = %v, want [codex delete --force uuid-9]", got)
+	if got := p.NativeCmd(); len(got) != 5 || got[0] != "codex" || got[1] != "--no-daemon" || got[2] != "delete" || got[3] != "--force" || got[4] != "uuid-9" {
+		t.Errorf("native cmd = %v, want [codex --no-daemon delete --force uuid-9]", got)
 	}
 	if len(p.Paths()) != 1 {
 		t.Errorf("codex should also remove the rollout file, got %v", p.Paths())
