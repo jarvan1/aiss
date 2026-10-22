@@ -3,8 +3,63 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
+
+func TestEachLineCompressedRollout(t *testing.T) {
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	// Codex can append independent frames; the line reader must span them and
+	// preserve non-ASCII messages and a final line without a newline.
+	data := encoder.EncodeAll([]byte("first\n\n中文消息\n"), nil)
+	data = append(data, encoder.EncodeAll([]byte("last"), nil)...)
+	plain := filepath.Join(t.TempDir(), "rollout-test.jsonl")
+	if err := os.WriteFile(plain+".zst", data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{plain + ".zst", plain} {
+		var lines []string
+		err := EachLine(path, func(raw []byte) bool {
+			lines = append(lines, string(raw))
+			return true
+		})
+		if err != nil || !reflect.DeepEqual(lines, []string{"first", "中文消息", "last"}) {
+			t.Fatalf("EachLine(%q) = %q, %v", path, lines, err)
+		}
+		calls := 0
+		err = EachLine(path, func([]byte) bool { calls++; return false })
+		if err != nil || calls != 1 {
+			t.Fatalf("early stop = %d callbacks, %v", calls, err)
+		}
+	}
+	if err := os.WriteFile(plain, []byte("restored plain\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(plain + ".zst"); err != nil {
+		t.Fatal(err)
+	}
+	var restored string
+	err = EachLine(plain+".zst", func(raw []byte) bool { restored = string(raw); return false })
+	if err != nil || restored != "restored plain" {
+		t.Fatalf("reopened rollout = %q, %v", restored, err)
+	}
+}
+
+func TestEachLineRejectsCorruptZstandard(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-corrupt.jsonl.zst")
+	if err := os.WriteFile(path, []byte("not a zstd frame"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EachLine(path, func([]byte) bool { return true }); err == nil {
+		t.Fatal("corrupt compressed input should report a read error")
+	}
+}
 
 func TestDiscoverCodexProfilesFromExplicitHomes(t *testing.T) {
 	root := t.TempDir()

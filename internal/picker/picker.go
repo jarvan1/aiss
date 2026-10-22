@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/jarvan1/aiss/internal/preview"
 	"github.com/jarvan1/aiss/internal/session"
@@ -71,8 +72,29 @@ type previewRequestMsg struct {
 }
 
 type previewLoadedMsg struct {
-	key  previewKey
-	text string
+	key      previewKey
+	document *previewDocument
+}
+
+type previewDocument struct {
+	text   string
+	header []string // fixed metadata box
+	lines  []string // wrapped transcript, prepared off the UI goroutine
+}
+
+func preparePreview(text string, width int) *previewDocument {
+	doc := &previewDocument{text: text}
+	body := text
+	if head, rest, ok := strings.Cut(text, "\n\n"); ok {
+		lines := strings.Split(head, "\n")
+		if strings.HasPrefix(ansi.Strip(lines[0]), "╭") &&
+			strings.HasPrefix(ansi.Strip(lines[len(lines)-1]), "╰") {
+			doc.header = append(lines, "")
+			body = rest
+		}
+	}
+	doc.lines = strings.Split(ansi.Hardwrap(strings.TrimRight(body, "\n"), max(1, width), true), "\n")
+	return doc
 }
 
 const previewDebounce = 75 * time.Millisecond
@@ -102,9 +124,11 @@ type picker struct {
 	profileOffset   int  // first visible profile when the list is taller than the pane
 
 	previewer      previewFunc
-	previewCache   map[previewKey]string
+	previewCache   map[previewKey]*previewDocument
 	previewKey     previewKey
 	previewText    string
+	previewDoc     *previewDocument
+	previewOffset  int
 	previewLoading bool
 	previewToken   uint64
 }
@@ -183,6 +207,8 @@ func (m *picker) queuePreview() tea.Cmd {
 		m.previewToken++
 		m.previewKey = previewKey{}
 		m.previewText = ""
+		m.previewDoc = nil
+		m.previewOffset = 0
 		m.previewLoading = false
 		return nil
 	}
@@ -195,13 +221,16 @@ func (m *picker) queuePreview() tea.Cmd {
 
 	m.previewToken++
 	m.previewKey = key
-	if text, ok := m.previewCache[key]; ok {
-		m.previewText = text
+	m.previewOffset = 0
+	if doc, ok := m.previewCache[key]; ok {
+		m.previewText = doc.text
+		m.previewDoc = doc
 		m.previewLoading = false
 		return nil
 	}
 
 	m.previewText = ""
+	m.previewDoc = nil
 	m.previewLoading = true
 	token := m.previewToken
 	return tea.Tick(previewDebounce, func(time.Time) tea.Msg {
@@ -215,8 +244,58 @@ func (m *picker) loadPreview(msg previewRequestMsg) tea.Cmd {
 		previewer = preview.Preview
 	}
 	return func() tea.Msg {
-		return previewLoadedMsg{key: msg.key, text: previewer(msg.session, msg.key.width)}
+		text := previewer(msg.session, msg.key.width)
+		return previewLoadedMsg{key: msg.key, document: preparePreview(text, msg.key.width)}
 	}
+}
+
+func (m *picker) currentPreview() *previewDocument {
+	if m.previewDoc != nil && m.previewDoc.text == m.previewText {
+		return m.previewDoc
+	}
+	_, width, _ := m.paneWidths()
+	return preparePreview(m.previewText, width)
+}
+
+func (m *picker) scrollPreview(delta int) {
+	if m.previewLoading {
+		return
+	}
+	doc := m.currentPreview()
+	visible := m.bodyHeight() - len(doc.header)
+	if visible <= 0 {
+		return
+	}
+	m.previewOffset = min(max(0, m.previewOffset+delta), max(0, len(doc.lines)-visible))
+}
+
+func (m *picker) mouseWheel(msg tea.MouseMsg) tea.Cmd {
+	delta := 0
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		delta = -1
+	case tea.MouseButtonWheelDown:
+		delta = 1
+	default:
+		return nil
+	}
+	if m.confirming || msg.Y < 1 || msg.Y >= m.height || msg.X < 0 || msg.X >= m.renderWidth() {
+		return nil
+	}
+	leftW, _, showPreview := m.paneWidths()
+	if showPreview && msg.X > leftW {
+		m.scrollPreview(delta * 3)
+		return nil // differential repaint; no file read or full-screen refresh
+	}
+	if showPreview && msg.X == leftW {
+		return nil // divider
+	}
+	if m.choosingProfile {
+		m.moveProfile(delta)
+	} else {
+		m.move(delta)
+	}
+	return m.fullRepaint()
 }
 
 // fullRepaint asks Bubble Tea to invalidate its differential-render cache and
@@ -426,6 +505,7 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.fixScroll()
 		m.fixProfileScroll()
+		m.scrollPreview(0)
 		return m, m.queuePreview()
 	case resizeTickMsg:
 		// Poll the size and re-arm the tick. pollSize only emits a
@@ -440,16 +520,29 @@ func (m *picker) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadPreview(msg)
 	case previewLoadedMsg:
 		if m.previewCache == nil {
-			m.previewCache = make(map[previewKey]string)
+			m.previewCache = make(map[previewKey]*previewDocument)
 		}
-		m.previewCache[msg.key] = msg.text
+		m.previewCache[msg.key] = msg.document
 		if msg.key == m.previewKey {
-			m.previewText = msg.text
+			m.previewText = msg.document.text
+			m.previewDoc = msg.document
 			m.previewLoading = false
 			return m, m.fullRepaint()
 		}
 		return m, nil
+	case tea.MouseMsg:
+		return m, m.mouseWheel(msg)
 	case tea.KeyMsg:
+		if msg.String() == "pgup" || msg.String() == "pgdown" {
+			delta := max(1, m.bodyHeight()-len(m.currentPreview().header)-1)
+			if msg.String() == "pgup" {
+				delta = -delta
+			}
+			if !m.confirming {
+				m.scrollPreview(delta)
+			}
+			return m, nil
+		}
 		// Profile selection is a self-contained second stage. Esc returns to the
 		// session list without closing the TUI; Enter applies the selected Codex
 		// environment and completes the original selection.
@@ -647,16 +740,19 @@ func (m *picker) View() string {
 	}
 
 	// --- preview (right) ---
-	prev := m.previewText
+	doc := m.currentPreview()
 	if m.previewLoading {
-		prev = hintStyle.Render("Loading preview…")
+		doc = &previewDocument{lines: []string{hintStyle.Render("Loading preview…")}}
 	}
-	plines := strings.Split(prev, "\n")
+	visible := max(0, body-len(doc.header))
+	offset := min(m.previewOffset, max(0, len(doc.lines)-visible))
 	divider := "│"
 	for i := 0; i < body; i++ {
 		line := ""
-		if i < len(plines) {
-			line = plines[i]
+		if i < len(doc.header) {
+			line = doc.header[i]
+		} else if idx := i - len(doc.header) + offset; idx < len(doc.lines) {
+			line = doc.lines[idx]
 		}
 		rows[i] += divider + padLine(line, rightW)
 	}
@@ -671,7 +767,7 @@ func Pick(sessions []session.Session, query string, profiles []session.CodexProf
 	// Select the controlling terminal before creating any styles. In shell
 	// widgets stdout is a captured pipe, while /dev/tty (or CONOUT$) is the real
 	// interactive output and must drive Lipgloss capability detection.
-	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion()}
 	tuiOut := os.Stderr
 	if in, out, closeConsole, ok := openConsole(); ok {
 		defer closeConsole()
@@ -695,7 +791,7 @@ func Pick(sessions []session.Session, query string, profiles []session.CodexProf
 		chosen:       -1,
 		del:          del,
 		previewer:    preview.Preview,
-		previewCache: make(map[previewKey]string),
+		previewCache: make(map[previewKey]*previewDocument),
 	}
 	m.targets = make([]string, len(sessions))
 	for i, s := range sessions {

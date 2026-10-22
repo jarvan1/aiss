@@ -49,12 +49,23 @@ func TestBuildPlanCodexPrefersNativeCmd(t *testing.T) {
 	if got := p.NativeCmd(); len(got) != 5 || got[0] != "codex" || got[1] != "--no-daemon" || got[2] != "delete" || got[3] != "--force" || got[4] != "uuid-9" {
 		t.Errorf("native cmd = %v, want [codex --no-daemon delete --force uuid-9]", got)
 	}
-	if len(p.Paths()) != 1 {
-		t.Errorf("codex should also remove the rollout file, got %v", p.Paths())
+	if got := p.Paths(); len(got) != 2 || got[0] != s.File || got[1] != s.File+".zst" {
+		t.Errorf("codex should remove plain and compressed rollouts, got %v", got)
 	}
 	wantEnv := []string{"CODEX_HOME=" + filepath.Join(home, ".codex-work"), "CODEX_SQLITE_HOME=" + filepath.Join(home, ".codex")}
 	if strings.Join(p.NativeEnv(), "|") != strings.Join(wantEnv, "|") {
 		t.Errorf("native env = %v, want %v", p.NativeEnv(), wantEnv)
+	}
+}
+
+func TestBuildPlanCodexCompressedRollout(t *testing.T) {
+	path := filepath.Join(session.Home(), ".codex", "sessions", "2026", "10", "10", "rollout-test.jsonl.zst")
+	p, err := BuildPlan(session.Session{Provider: "codex", ID: "test", File: path}, session.Dirs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Paths(); len(got) != 2 || got[0] != path || got[1] != strings.TrimSuffix(path, ".zst") {
+		t.Fatalf("compressed deletion plan = %v", got)
 	}
 }
 

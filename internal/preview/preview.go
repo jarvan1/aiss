@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/jarvan1/aiss/internal/codexhistory"
 	"github.com/jarvan1/aiss/internal/session"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/reflow/truncate"
@@ -193,6 +194,11 @@ func readTranscript(s session.Session) (meta, []turn) {
 	case "claude":
 		return readClaude(s.File)
 	case "codex":
+		if s.CodexHistoryDB != "" {
+			if m, turns, err := readPaginatedCodex(s); err == nil {
+				return m, turns
+			}
+		}
 		return readCodex(s.File)
 	case "copilot":
 		return readCopilot(s.File)
@@ -200,6 +206,43 @@ func readTranscript(s session.Session) (meta, []turn) {
 		return readGemini(s.File)
 	}
 	return meta{provider: s.Provider, cwd: s.Cwd}, nil
+}
+
+func readPaginatedCodex(s session.Session) (meta, []turn, error) {
+	thread, err := codexhistory.Lookup(s.CodexSQLiteHome, s.ID)
+	if err != nil {
+		return meta{}, nil, err
+	}
+	messages, err := codexhistory.Messages(s.CodexHistoryDB, s.ID)
+	if err != nil {
+		return meta{}, nil, err
+	}
+	m := meta{provider: "codex", model: thread.Model, cwd: thread.Cwd,
+		t0: thread.CreatedAt, t1: thread.UpdatedAt}
+	if m.model == "" {
+		m.model = "?"
+	}
+	if thread.Version != "" {
+		m.verLine = "codex " + thread.Version
+		if thread.ModelProvider != "" {
+			m.verLine += " · " + thread.ModelProvider
+		}
+	}
+	var turns []turn
+	for _, message := range messages {
+		if message.Role == "user" {
+			m.nUser++
+			if message.Text != "" && !session.ReCodexInjected.MatchString(message.Text) {
+				turns = append(turns, turn{"user", message.Text})
+			}
+		} else {
+			m.nAsst++
+			if message.Text != "" {
+				turns = append(turns, turn{"assistant", message.Text})
+			}
+		}
+	}
+	return m, turns, nil
 }
 
 func readClaude(file string) (meta, []turn) {

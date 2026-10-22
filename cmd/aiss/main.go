@@ -163,4 +163,5 @@ Providers: claude, codex, copilot, gemini
 Env: AISS_CLAUDE_DIR, AISS_CODEX_DIR, AISS_COPILOT_DIR, AISS_GEMINI_DIR,
      AISS_CODEX_HOMES, AISS_CODEX_SQLITE_HOME,
      AISS_SHOW_MISSING=1 (keep sessions whose dir was deleted)
+     AISS_SHOW_INTERNAL=1 (include Codex Guardian approval reviews)
 `

@@ -75,6 +75,13 @@ func BuildPlan(s session.Session, dirs session.Dirs) (Plan, error) {
 			}
 		}
 		add(s.File)
+		// Codex can compress a rollout after the picker scans it. Remove both
+		// representations so the session cannot reappear on the next scan.
+		if strings.HasSuffix(s.File, ".jsonl.zst") {
+			add(strings.TrimSuffix(s.File, ".zst"))
+		} else if strings.HasSuffix(s.File, ".jsonl") {
+			add(s.File + ".zst")
+		}
 	case "copilot":
 		// session-state/<uuid>/ — remove the whole session directory.
 		add(filepath.Dir(s.File))

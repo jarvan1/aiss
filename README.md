@@ -87,6 +87,11 @@ In the picker, type to fuzzy-filter (the provider name is part of each row, so
 typing `claude` narrows to Claude), use the arrow keys to move, watch the live
 preview pane on the right, and press Enter to resume.
 
+Scroll over the right pane to browse the conversation while its metadata header
+stays visible. Scroll over the left pane to change the selected session (or
+profile). Long preview lines wrap to the pane width. PgUp/PgDn also scroll the
+preview; switching sessions returns the preview to the top.
+
 **Delete a session** — press **Ctrl-D** on the highlighted row, then `y` to
 confirm (any other key cancels). Deletion is provider-aware: for Codex it calls
 `codex delete` (which also prunes Codex's own index) and removes the rollout
@@ -130,7 +135,7 @@ tools) and dispatches resume to the matching CLI:
 | Provider | Scanned path | Resume |
 |----------|--------------|--------|
 | Claude   | `~/.claude/projects/<dir>/<uuid>.jsonl` | `claude --resume <uuid>` |
-| Codex    | `<sqlite-home>/sessions/**/rollout-*.jsonl` and profile homes | `CODEX_HOME=… CODEX_SQLITE_HOME=… codex resume <uuid> [-m model]` |
+| Codex    | `<sqlite-home>/sessions/**/rollout-*.jsonl[.zst]` and profile homes | `CODEX_HOME=… CODEX_SQLITE_HOME=… codex --no-daemon resume <uuid> [-m model]` |
 | Copilot  | `~/.copilot/session-state/<uuid>/events.jsonl` | `copilot --resume=<uuid>` |
 | Gemini   | `~/.gemini/tmp/<hash>/logs.json` (experimental) | opens in the dir (no resume-by-id) |
 
@@ -140,6 +145,19 @@ on `PATH` to *resume*; browsing and previewing work without any of them.
 
 Sessions whose original directory no longer exists are hidden — set
 `AISS_SHOW_MISSING=1` to keep them.
+
+Codex's Zstandard-compressed rollouts (`.jsonl.zst`) are scanned and previewed
+directly, including rollouts retained after migration to paginated history.
+Decompression is streamed inside `aiss`; no `zstd` command or unpacked copy is
+needed. Paginated sessions are also discovered from `state_*.sqlite`, and their
+current conversation is read from `thread_history_*.sqlite` even if the rollout
+is gone. Databases are opened read-only with no external `sqlite3` dependency.
+Resume uses the original session ID through Codex as usual.
+
+Codex's internal `Guardian review` approval threads are hidden by default, so
+they do not appear as duplicate chats beside their parent conversation. For
+diagnostics, set `AISS_SHOW_INTERNAL=1` to include them. Records are preserved;
+ordinary subagent and forked conversations remain visible.
 
 ### Multiple Codex homes
 
@@ -178,6 +196,7 @@ existing `codex-w` / `codex-p` functions do not need to change.
 | `AISS_COPILOT_DIR` | `~/.copilot/session-state` |
 | `AISS_GEMINI_DIR`  | `~/.gemini/tmp` |
 | `AISS_SHOW_MISSING`| unset (set to `1` to keep deleted-dir sessions) |
+| `AISS_SHOW_INTERNAL` | unset (set to `1` to include Codex Guardian approval reviews) |
 | `AISS_KEYBIND`     | `^X^W` (only used by the optional zsh integration) |
 
 ## Cross-platform builds

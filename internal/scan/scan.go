@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/jarvan1/aiss/internal/codexhistory"
 	"github.com/jarvan1/aiss/internal/session"
 )
 
@@ -119,10 +121,17 @@ func scanCodexHomes(d session.Dirs, keepMissing bool) []session.Session {
 	seenRoots := make(map[string]bool)
 	scanRoot := func(root string, fixedProfile *session.CodexProfile) {
 		root = filepath.Clean(root)
-		if root == "." || seenRoots[root] {
+		key := root
+		// Profile homes may symlink their sessions tree to the shared runtime
+		// home. Resolve that root so it is walked once, including when the shared
+		// path was overridden or is itself a symlink.
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			key = resolved
+		}
+		if root == "." || seenRoots[key] {
 			return
 		}
-		seenRoots[root] = true
+		seenRoots[key] = true
 		out = append(out, scanCodex(root, keepMissing, d.CodexProfiles, d.CodexProfileSelections, fixedProfile)...)
 	}
 
@@ -133,12 +142,123 @@ func scanCodexHomes(d session.Dirs, keepMissing bool) []session.Session {
 		profile := &d.CodexProfiles[i]
 		scanRoot(filepath.Join(profile.Home, "sessions"), profile)
 	}
+	// Migrated threads may exist only in SQLite. Merge its current metadata and
+	// history location by thread ID rather than emitting duplicate rollout rows.
+	byID := make(map[string]int)
+	for i, s := range out {
+		byID[s.ID] = i
+	}
+	homes := []string{filepath.Dir(d.Codex)}
+	for _, profile := range d.CodexProfiles {
+		homes = append(homes, profile.SQLiteHome)
+	}
+	seenHomes := make(map[string]bool)
+	for _, home := range homes {
+		if home == "" || seenHomes[home] {
+			continue
+		}
+		seenHomes[home] = true
+		threads, err := codexhistory.List(home)
+		if err != nil {
+			continue // absent/older/busy DB: retain rollout-based discovery
+		}
+		for _, thread := range threads {
+			if !keepMissing && thread.Cwd != "" && !session.DirExists(thread.Cwd) {
+				continue
+			}
+			s := session.Session{Provider: "codex", ID: thread.ID, Cwd: thread.Cwd,
+				File: thread.File, Preview: session.CollapseWS(thread.Preview), Model: thread.Model,
+				ModTime: thread.UpdatedAt, CodexSQLiteHome: home, CodexHistoryDB: thread.HistoryDB,
+				CodexInternalReview: thread.InternalReview}
+			if i, ok := byID[s.ID]; ok {
+				// Keep the actual on-disk .zst path (state DB retains .jsonl).
+				s.File = out[i].File
+				s.Profile, s.CodexHome = out[i].Profile, out[i].CodexHome
+				s.CodexInternalReview = s.CodexInternalReview || out[i].CodexInternalReview
+				if s.Preview == "" {
+					s.Preview = out[i].Preview
+				}
+			}
+			applyCodexProfile(&s, d.CodexProfiles, d.CodexProfileSelections, nil, thread.AccountID)
+			if i, ok := byID[s.ID]; ok {
+				out[i] = s
+			} else {
+				byID[s.ID] = len(out)
+				out = append(out, s)
+			}
+		}
+	}
+	if !session.ShowInternal() {
+		visible := out[:0]
+		for _, s := range out {
+			if !s.CodexInternalReview {
+				visible = append(visible, s)
+			}
+		}
+		out = visible
+	}
 	return out
 }
 
+func applyCodexProfile(s *session.Session, profiles []session.CodexProfile, remembered map[string]session.CodexProfileSelection, fixed *session.CodexProfile, accountID string) {
+	profile := fixed
+	if profile == nil && accountID != "" {
+		for i := range profiles {
+			if profiles[i].AccountID != "" && profiles[i].AccountID == accountID {
+				profile = &profiles[i]
+				break
+			}
+		}
+	}
+	if profile == nil && s.Profile == "" {
+		if selected, ok := remembered[s.ID]; ok {
+			for i := range profiles {
+				if (selected.Home != "" && profiles[i].Home == selected.Home) ||
+					(selected.Home == "" && selected.Name != "" && profiles[i].Name == selected.Name) {
+					profile = &profiles[i]
+					break
+				}
+			}
+		}
+	}
+	if profile != nil {
+		s.Profile = profile.Name
+		s.CodexHome = profile.Home
+		s.CodexSQLiteHome = profile.SQLiteHome
+	}
+}
+
+// codexRolloutFiles recognizes both storage forms and prefers the plain file
+// when both exist during compression. Temporary and unrelated suffixes are
+// ignored rather than parsed as duplicate conversations.
+func codexRolloutFiles(root string) []string {
+	// WalkDir does not follow a symlink passed as the root. Keep the caller's
+	// root for runtime-home inference while walking its actual directory.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	files := globRecursive(root, "rollout-*.jsonl*")
+	plain := make(map[string]bool)
+	for _, file := range files {
+		if strings.HasSuffix(file, ".jsonl") {
+			plain[file] = true
+		}
+	}
+	var out []string
+	for _, file := range files {
+		if strings.HasSuffix(file, ".jsonl") ||
+			(strings.HasSuffix(file, ".jsonl.zst") && !plain[strings.TrimSuffix(file, ".zst")]) {
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
+var codexFilenameUUID = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 func scanCodex(root string, keepMissing bool, profiles []session.CodexProfile, remembered map[string]session.CodexProfileSelection, fixedProfile *session.CodexProfile) []session.Session {
 	var out []session.Session
-	for _, f := range globRecursive(root, "rollout-*.jsonl") {
+	for _, f := range codexRolloutFiles(root) {
 		base, ok := mtime(f)
 		if !ok {
 			continue
@@ -146,18 +266,21 @@ func scanCodex(root string, keepMissing bool, profiles []session.CodexProfile, r
 		type line struct {
 			Type    string `json:"type"`
 			Payload struct {
-				Type             string `json:"type"`
-				Role             string `json:"role"`
-				ID               string `json:"id"`
-				Cwd              string `json:"cwd"`
-				CreatorAccountID string `json:"creator_account_id"`
+				Type             string          `json:"type"`
+				Role             string          `json:"role"`
+				ID               string          `json:"id"`
+				SessionID        string          `json:"session_id"`
+				Cwd              string          `json:"cwd"`
+				CreatorAccountID string          `json:"creator_account_id"`
+				ThreadSource     string          `json:"thread_source"`
+				Source           json.RawMessage `json:"source"`
 				Content          []struct {
 					Text string `json:"text"`
 				} `json:"content"`
 			} `json:"payload"`
 		}
 		var id, cwd, prompt, creatorAccountID string
-		session.EachLine(f, func(raw []byte) bool {
+		err := session.EachLine(f, func(raw []byte) bool {
 			var l line
 			if json.Unmarshal(raw, &l) != nil {
 				return true
@@ -165,12 +288,21 @@ func scanCodex(root string, keepMissing bool, profiles []session.CodexProfile, r
 			if l.Type == "session_meta" {
 				if id == "" {
 					id = l.Payload.ID
+					if id == "" {
+						id = l.Payload.SessionID
+					}
 				}
 				if cwd == "" {
 					cwd = l.Payload.Cwd
 				}
 				if creatorAccountID == "" {
 					creatorAccountID = l.Payload.CreatorAccountID
+				}
+				if session.IsCodexInternalReview(l.Payload.ThreadSource, l.Payload.Source) {
+					base.CodexInternalReview = true
+					if !session.ShowInternal() {
+						return false // don't parse internal approval transcripts
+					}
 				}
 			}
 			if prompt == "" && l.Payload.Type == "message" && l.Payload.Role == "user" {
@@ -183,10 +315,15 @@ func scanCodex(root string, keepMissing bool, profiles []session.CodexProfile, r
 			}
 			return !(id != "" && cwd != "" && prompt != "")
 		})
+		if err != nil && id == "" {
+			continue // unreadable/corrupt rollouts are not resumable entries
+		}
 		if id == "" {
 			// fallback: trailing uuid in the filename rollout-<ts>-<uuid>.jsonl
-			name := strings.TrimSuffix(filepath.Base(f), ".jsonl")
-			if i := strings.LastIndex(name, "-"); i >= 0 {
+			name := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(f), ".zst"), ".jsonl")
+			if uuid := codexFilenameUUID.FindString(name); uuid != "" {
+				id = uuid
+			} else if i := strings.LastIndex(name, "-"); i >= 0 {
 				id = name[i+1:]
 			}
 		}
@@ -199,31 +336,7 @@ func scanCodex(root string, keepMissing bool, profiles []session.CodexProfile, r
 		base.File = f
 		base.Preview = session.CollapseWS(prompt)
 		base.CodexSQLiteHome = filepath.Dir(root)
-		profile := fixedProfile
-		if profile == nil && creatorAccountID != "" {
-			for i := range profiles {
-				if profiles[i].AccountID != "" && profiles[i].AccountID == creatorAccountID {
-					profile = &profiles[i]
-					break
-				}
-			}
-		}
-		if profile == nil {
-			if selected, ok := remembered[id]; ok {
-				for i := range profiles {
-					if (selected.Home != "" && profiles[i].Home == selected.Home) ||
-						(selected.Home == "" && selected.Name != "" && profiles[i].Name == selected.Name) {
-						profile = &profiles[i]
-						break
-					}
-				}
-			}
-		}
-		if profile != nil {
-			base.Profile = profile.Name
-			base.CodexHome = profile.Home
-			base.CodexSQLiteHome = profile.SQLiteHome
-		}
+		applyCodexProfile(&base, profiles, remembered, fixedProfile, creatorAccountID)
 		out = append(out, base)
 	}
 	return out

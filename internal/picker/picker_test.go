@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -8,9 +9,152 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jarvan1/aiss/internal/session"
 	"github.com/muesli/termenv"
 )
+
+func scrollTestPicker() *picker {
+	m := newTestPicker()
+	m.refilter()
+	m.width, m.height = 120, 16
+	m.previewKey = previewKey{file: m.sessions[0].File, width: 65}
+	var text strings.Builder
+	text.WriteString("\x1b[36m╭─ fixture-model ─╮\x1b[0m\n│ project\n│ timestamp\n│ counts\n╰────────────────╯\n\n")
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&text, "message-%02d\n", i)
+	}
+	m.previewText = text.String()
+	m.previewDoc = preparePreview(m.previewText, 65)
+	return m
+}
+
+func wheel(x, y int, down bool) tea.MouseMsg {
+	button := tea.MouseButtonWheelUp
+	if down {
+		button = tea.MouseButtonWheelDown
+	}
+	return tea.MouseMsg{X: x, Y: y, Button: button, Action: tea.MouseActionPress}
+}
+
+func TestWheelOverPreviewScrollsOnlyTranscript(t *testing.T) {
+	m := scrollTestPicker()
+	m.previewer = func(session.Session, int) string { t.Fatal("scroll must not read history"); return "" }
+	before := strings.Split(m.View(), "\n")
+	_, cmd := m.Update(wheel(100, 10, true))
+	if cmd != nil {
+		t.Fatal("preview scrolling must not schedule a full repaint or history load")
+	}
+	if m.cursor != 0 || m.previewOffset != 3 {
+		t.Fatalf("cursor=%d, preview offset=%d, want 0 and 3", m.cursor, m.previewOffset)
+	}
+	after := strings.Split(m.View(), "\n")
+	for i := 0; i <= len(m.previewDoc.header); i++ {
+		if before[i] != after[i] {
+			t.Fatalf("fixed header changed on row %d", i)
+		}
+	}
+	if strings.Contains(m.View(), "message-00") || !strings.Contains(m.View(), "message-03") {
+		t.Fatal("preview did not scroll past the initial transcript lines")
+	}
+	m.Update(wheel(100, 10, false))
+	if m.previewOffset != 0 || !strings.Contains(m.View(), "message-00") {
+		t.Fatal("scrolling up did not restore the initial transcript")
+	}
+}
+
+func TestWheelOverListSwitchesSessionAndResetsPreview(t *testing.T) {
+	m := scrollTestPicker()
+	m.previewOffset = 12
+	m.previewCache = map[previewKey]*previewDocument{
+		{file: m.sessions[1].File, width: 65}: preparePreview("next session", 65),
+	}
+	_, cmd := m.Update(wheel(4, 8, true))
+	if m.cursor != 1 || cmd == nil {
+		t.Fatalf("left wheel: cursor=%d, command=%v", m.cursor, cmd != nil)
+	}
+	m.Update(cmd()) // in-place redraw schedules the newly selected preview
+	if m.previewOffset != 0 || m.previewText != "next session" {
+		t.Fatalf("cached session did not start at top: offset=%d text=%q", m.previewOffset, m.previewText)
+	}
+}
+
+func TestPreviewScrollBoundsAndResize(t *testing.T) {
+	m := scrollTestPicker()
+	for i := 0; i < 100; i++ {
+		m.Update(wheel(100, 10, true))
+	}
+	want := len(m.previewDoc.lines) - (m.bodyHeight() - len(m.previewDoc.header))
+	if m.previewOffset != want || !strings.Contains(m.View(), "message-59") {
+		t.Fatalf("bottom offset=%d, want %d with last message visible", m.previewOffset, want)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 80})
+	if m.previewOffset != 0 {
+		t.Fatal("growing the pane must clamp the old scroll offset")
+	}
+	for i := 0; i < 100; i++ {
+		m.Update(wheel(100, 10, false))
+	}
+	if m.previewOffset != 0 {
+		t.Fatal("scrolling above the beginning must clamp at zero")
+	}
+}
+
+func TestWheelIgnoresPromptDividerAndDeleteConfirmation(t *testing.T) {
+	for _, pos := range [][2]int{{100, 0}, {53, 8}, {120, 8}, {100, 16}} {
+		m := scrollTestPicker()
+		m.Update(wheel(pos[0], pos[1], true))
+		if m.cursor != 0 || m.previewOffset != 0 {
+			t.Fatalf("outside-pane wheel changed selection at %v", pos)
+		}
+	}
+	m := scrollTestPicker()
+	m.confirming = true
+	m.Update(wheel(100, 10, true))
+	m.Update(wheel(4, 10, true))
+	if !m.confirming || m.cursor != 0 || m.previewOffset != 0 {
+		t.Fatal("wheel must not change a pending delete target")
+	}
+}
+
+func TestWheelSupportsProfileListWhileKeepingPreviewIndependent(t *testing.T) {
+	m := scrollTestPicker()
+	m.profiles = []session.CodexProfile{{Name: "personal"}, {Name: "work"}}
+	m.choosingProfile = true
+	m.Update(wheel(4, 10, true))
+	if m.profileCursor != 1 || m.cursor != 0 {
+		t.Fatal("left wheel should move only the profile cursor")
+	}
+	m.Update(wheel(100, 10, true))
+	if m.profileCursor != 1 || m.previewOffset != 3 {
+		t.Fatal("right wheel should scroll the same preview in the profile stage")
+	}
+}
+
+func TestWrappedPreviewKeepsUnicodeAndTerminalWidth(t *testing.T) {
+	m := newTestPicker()
+	m.refilter()
+	m.width, m.height = 100, 12
+	_, width, _ := m.paneWidths()
+	text := "\x1b[36m" + strings.Repeat("中文🙂内容", 40) + "END-OF-MESSAGE\x1b[0m"
+	m.previewText = text
+	m.previewDoc = preparePreview(text, width)
+	if strings.Join(strings.Split(ansi.Strip(strings.Join(m.previewDoc.lines, "")), "\n"), "") != ansi.Strip(text) {
+		t.Fatal("wrapping lost transcript content")
+	}
+	for _, delta := range []int{0, 3, 1000, -1000} {
+		m.scrollPreview(delta)
+		view := m.View()
+		if lipgloss.Height(view) != m.height {
+			t.Fatal("wrapped preview changed terminal height")
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if lipgloss.Width(line) >= m.width {
+				t.Fatal("wrapped preview used the terminal's last column")
+			}
+		}
+	}
+}
 
 func TestMatchProvider(t *testing.T) {
 	cases := map[string]string{

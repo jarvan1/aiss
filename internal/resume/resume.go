@@ -43,7 +43,11 @@ func PlanResume(s session.Session) (Plan, error) {
 		// the shared app-server daemon so a daemon started by one CODEX_HOME does
 		// not keep serving commands selected for another account.
 		args := []string{"--no-daemon", "resume", s.ID}
-		if model := codexModel(s.File); model != "" {
+		model := s.Model
+		if model == "" {
+			model = codexModel(s.File)
+		}
+		if model != "" {
 			args = append(args, "-m", model)
 		}
 		return Plan{dir: dir, name: "codex", args: args, env: codexEnv(s)}, nil

@@ -5,24 +5,30 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Session is one resumable AI-CLI conversation discovered on disk.
 type Session struct {
-	Provider        string    // claude | codex | copilot | gemini
-	ID              string    // resume key (uuid / dir name)
-	Cwd             string    // original working directory
-	File            string    // path to the session file on disk
-	Preview         string    // first real user message, single-lined
-	ModTime         time.Time // file mtime, used as the sort key (newest first)
-	Profile         string    // optional account/config profile label (e.g. work)
-	CodexHome       string    // CODEX_HOME needed to resume/delete this Codex session
-	CodexSQLiteHome string    // shared Codex runtime-state home, when configured
+	Provider            string    // claude | codex | copilot | gemini
+	ID                  string    // resume key (uuid / dir name)
+	Cwd                 string    // original working directory
+	File                string    // path to the session file on disk
+	Preview             string    // first real user message, single-lined
+	ModTime             time.Time // file mtime, used as the sort key (newest first)
+	Profile             string    // optional account/config profile label (e.g. work)
+	CodexHome           string    // CODEX_HOME needed to resume/delete this Codex session
+	CodexSQLiteHome     string    // shared Codex runtime-state home, when configured
+	CodexHistoryDB      string    // paginated history database, when discovered
+	Model               string    // latest recorded model from paginated state
+	CodexInternalReview bool      // Guardian approval assessment, not a user chat
 }
 
 // ProviderLabel returns the picker/scan label, including an originating
@@ -265,6 +271,23 @@ func codexAccountID(home string) string {
 // ShowMissing reports whether sessions whose cwd no longer exists should be kept.
 func ShowMissing() bool { return EnvOr("AISS_SHOW_MISSING", "") != "" }
 
+// ShowInternal includes Codex's internal approval-review threads for diagnostics.
+func ShowInternal() bool { return EnvOr("AISS_SHOW_INTERNAL", "") != "" }
+
+// IsCodexInternalReview uses structural metadata rather than titles, directories,
+// or shared session IDs. Ordinary subagents and user-created forks stay visible.
+func IsCodexInternalReview(threadSource string, source json.RawMessage) bool {
+	if threadSource == "guardian_review" {
+		return true
+	}
+	var origin struct {
+		Subagent struct {
+			Other string `json:"other"`
+		} `json:"subagent"`
+	}
+	return json.Unmarshal(source, &origin) == nil && origin.Subagent.Other == "guardian"
+}
+
 // Shared regexes: a leading "<" marks an injected/system message, and the codex
 // variant also catches its wrapper tags. Both scan and preview filter on these.
 var (
@@ -324,16 +347,35 @@ func TruncRunes(s string, n int) string {
 	return string(r[:n])
 }
 
-// EachLine streams a (possibly large) JSONL file line by line. The callback gets
-// the raw bytes of each non-empty line; return false to stop early.
+// EachLine streams plain or Zstandard-compressed JSONL without unpacking it to
+// disk. If Codex changed its storage form since discovery, retry the other
+// representation. The callback gets each non-empty line; return false to stop.
 func EachLine(path string, fn func(raw []byte) bool) error {
 	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		if strings.HasSuffix(path, ".jsonl") {
+			path += ".zst"
+			f, err = os.Open(path)
+		} else if strings.HasSuffix(path, ".jsonl.zst") {
+			path = strings.TrimSuffix(path, ".zst")
+			f, err = os.Open(path)
+		}
+	}
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	sc := bufio.NewScanner(f)
+	var reader io.Reader = f
+	if strings.HasSuffix(path, ".zst") {
+		decoder, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(256<<20))
+		if err != nil {
+			return err
+		}
+		defer decoder.Close()
+		reader = decoder
+	}
+	sc := bufio.NewScanner(reader)
 	// Session lines (esp. assistant turns with embedded tool output) can be huge.
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {

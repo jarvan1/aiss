@@ -1,11 +1,38 @@
 package resume
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jarvan1/aiss/internal/session"
+	"github.com/klauspost/compress/zstd"
 )
+
+func TestResumeCompressedCodexPreservesIDModelAndProfile(t *testing.T) {
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	path := filepath.Join(t.TempDir(), "rollout-model.jsonl.zst")
+	data := []byte("{\"type\":\"turn_context\",\"payload\":{\"model\":\"fixture-model\"}}\n")
+	if err := os.WriteFile(path, encoder.EncodeAll(data, nil), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := PlanResume(session.Session{
+		Provider: "codex", ID: "01a1244c-57e6-7660-9f1f-b18f18798936", File: path,
+		Cwd: "/tmp/project", CodexHome: "/profiles/work", CodexSQLiteHome: "/shared",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "( cd '/tmp/project' && CODEX_HOME='/profiles/work' CODEX_SQLITE_HOME='/shared' codex '--no-daemon' 'resume' '01a1244c-57e6-7660-9f1f-b18f18798936' '-m' 'fixture-model' )"
+	if got := p.Shell(); got != want {
+		t.Fatalf("compressed resume = %q, want %q", got, want)
+	}
+}
 
 func TestPlanResumeShell(t *testing.T) {
 	cases := []struct {
