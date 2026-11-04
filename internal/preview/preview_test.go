@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jarvan1/aiss/internal/session"
 	"github.com/klauspost/compress/zstd"
 )
@@ -67,5 +68,28 @@ func TestPreviewHeaderIncludesProfile(t *testing.T) {
 	got := Preview(session.Session{Provider: "codex", Profile: "work"}, 60)
 	if !strings.Contains(got, "codex:work") {
 		t.Fatalf("profile missing from preview header: %q", got)
+	}
+}
+
+func TestPreviewHeaderSessionName(t *testing.T) {
+	for _, name := range []string{"Default session", "重命名后的会话", "Long name " + strings.Repeat("中文", 60), "unsafe\x1b[2J\nname\t\a"} {
+		s := session.Session{Provider: "codex", Profile: "work", Name: name}
+		got := Preview(s, 44)
+		plain := ansi.Strip(got)
+		if !strings.Contains(plain, "Name: ") || !strings.Contains(plain, "codex:work") {
+			t.Fatalf("missing name/provider: %q", got)
+		}
+		header, _, _ := strings.Cut(plain, "\n\n")
+		for _, line := range strings.Split(header, "\n") {
+			if ansi.StringWidth(line) != 44 {
+				t.Errorf("header width = %d: %q", ansi.StringWidth(line), line)
+			}
+		}
+		if strings.Contains(got, "\x1b[2J") || strings.Contains(got, "\a") || strings.Contains(got, "\t") {
+			t.Fatalf("unsafe name: %q", got)
+		}
+	}
+	if got := Preview(session.Session{Provider: "codex"}, 44); strings.Contains(got, "Name: ") {
+		t.Fatal("unnamed sessions should not show an empty row")
 	}
 }

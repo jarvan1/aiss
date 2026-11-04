@@ -29,6 +29,7 @@ const (
 
 // meta is the header info shown above the transcript.
 type meta struct {
+	name     string
 	provider string
 	model    string
 	verLine  string
@@ -49,6 +50,7 @@ type turn struct {
 // width is the column budget for the header box rules; <=0 uses a default.
 func Preview(s session.Session, width int) string {
 	m, turns := readTranscript(s)
+	m.name = s.Name
 	if s.Profile != "" {
 		m.provider = s.ProviderLabel()
 	}
@@ -151,6 +153,9 @@ func renderHeader(m meta, width int) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s╭%s%s%s╮%s\n", cCyan, titleStyled, cCyan, strings.Repeat("─", topFill), cReset)
+	if name := sanitizeInline(m.name); strings.TrimSpace(name) != "" {
+		b.WriteString(boxRow("Name: "+name, "Name: "+name))
+	}
 	b.WriteString(boxRow(cwdStyled, cwdPlain))
 	b.WriteString(boxRow(timeStyled, timePlain))
 	b.WriteString(boxRow(msgStyled, msgPlain))

@@ -57,6 +57,7 @@ func TestPaginatedDiscoveryPreviewAndResumeWithoutRollout(t *testing.T) {
 	db := createState(t, home, "state_5.sqlite")
 	rollout := filepath.Join(sessionsDir, "rollout-old.jsonl")
 	insertThread(t, db, "db-only", rollout, home, 0)
+	execSQL(t, db, `UPDATE threads SET title='Default session title' WHERE id='db-only'`)
 	insertThread(t, db, "archived", rollout, home, 1)
 	insertThread(t, db, "missing-cwd", rollout, filepath.Join(home, "gone"), 0)
 	historyPath := filepath.Join(home, "thread_history_1.sqlite")
@@ -87,7 +88,7 @@ func TestPaginatedDiscoveryPreviewAndResumeWithoutRollout(t *testing.T) {
 		t.Fatalf("SQLite metadata = %#v", s)
 	}
 	view := preview.Preview(s, 80)
-	for _, want := range []string{"codex:work", "db-model", "查询旧记录", "分页中最新的回答", "1 user", "1 assistant"} {
+	for _, want := range []string{"Name: Default session title", "codex:work", "db-model", "查询旧记录", "分页中最新的回答", "1 user", "1 assistant"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("preview missing %q: %q", want, view)
 		}
@@ -104,6 +105,12 @@ func TestPaginatedDiscoveryPreviewAndResumeWithoutRollout(t *testing.T) {
 	}
 	if all := scan.Scan(dirs, true); len(all) != 2 {
 		t.Fatalf("keepMissing = %d sessions, want 2", len(all))
+	}
+	execSQL(t, db, `ALTER TABLE threads ADD COLUMN name TEXT`)
+	execSQL(t, db, `UPDATE threads SET name='Renamed session' WHERE id='db-only'`)
+	renamed := scan.Scan(dirs, false)
+	if len(renamed) != 1 || !strings.Contains(preview.Preview(renamed[0], 80), "Name: Renamed session") {
+		t.Fatalf("rename not reflected in preview: %#v", renamed)
 	}
 }
 

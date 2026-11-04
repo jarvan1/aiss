@@ -22,6 +22,7 @@ type Session struct {
 	Cwd                 string    // original working directory
 	File                string    // path to the session file on disk
 	Preview             string    // first real user message, single-lined
+	Name                string    // recorded session name (explicit rename or default title)
 	ModTime             time.Time // file mtime, used as the sort key (newest first)
 	Profile             string    // optional account/config profile label (e.g. work)
 	CodexHome           string    // CODEX_HOME needed to resume/delete this Codex session

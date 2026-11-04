@@ -92,6 +92,11 @@ stays visible. Scroll over the left pane to change the selected session (or
 profile). Long preview lines wrap to the pane width. PgUp/PgDn also scroll the
 preview; switching sessions returns the preview to the top.
 
+The Codex preview header also shows the recorded session name, including
+default titles and names changed with `/rename`. Names are read from the local
+state database and `session_index.jsonl`, including profile-local indexes.
+Sessions without naming metadata omit the name row.
+
 **Delete a session** — press **Ctrl-D** on the highlighted row, then `y` to
 confirm (any other key cancels). Deletion is provider-aware: for Codex it calls
 `codex delete` (which also prunes Codex's own index) and removes the rollout

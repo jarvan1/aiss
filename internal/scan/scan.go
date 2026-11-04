@@ -188,6 +188,25 @@ func scanCodexHomes(d session.Dirs, keepMissing bool) []session.Session {
 			}
 		}
 	}
+	// Names also exist for legacy rollouts and in profile-local indexes, not
+	// just paginated threads. Read each optional source once per scan.
+	namesByHome := make(map[string]map[string]string)
+	for i := range out {
+		for _, home := range []string{out[i].CodexHome, out[i].CodexSQLiteHome, filepath.Dir(d.Codex)} {
+			if home == "" || home == "." {
+				continue
+			}
+			names, loaded := namesByHome[home]
+			if !loaded {
+				names = codexhistory.Names(home)
+				namesByHome[home] = names
+			}
+			if name := names[out[i].ID]; name != "" {
+				out[i].Name = name
+				break
+			}
+		}
+	}
 	if !session.ShowInternal() {
 		visible := out[:0]
 		for _, s := range out {

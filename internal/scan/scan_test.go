@@ -60,6 +60,31 @@ func TestScanCodexHomesAssociatesSharedRolloutsWithProfiles(t *testing.T) {
 	}
 }
 
+func TestScanCodexNamesFromSharedAndProfileIndexes(t *testing.T) {
+	home, profile := t.TempDir(), t.TempDir()
+	root := filepath.Join(home, "sessions")
+	writeCodexRollout(t, root, "shared", home, "")
+	writeCodexRollout(t, filepath.Join(profile, "sessions"), "local", home, "")
+	for dir, index := range map[string]string{
+		home:    `{"id":"shared","thread_name":"Default name"}`,
+		profile: `{"id":"local","thread_name":"Renamed profile chat"}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "session_index.jsonl"), []byte(index), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := scanCodexHomes(session.Dirs{Codex: root, CodexProfiles: []session.CodexProfile{{Name: "work", Home: profile, SQLiteHome: home}}}, false)
+	if len(got) != 2 {
+		t.Fatalf("sessions = %#v", got)
+	}
+	for _, s := range got {
+		want := map[string]string{"shared": "Default name", "local": "Renamed profile chat"}[s.ID]
+		if s.Name != want {
+			t.Errorf("name[%s] = %q, want %q", s.ID, s.Name, want)
+		}
+	}
+}
+
 func TestScanCodexCompressedRollouts(t *testing.T) {
 	root := t.TempDir()
 	sessions := filepath.Join(root, "runtime", "sessions")
