@@ -92,9 +92,11 @@ stays visible. Scroll over the left pane to change the selected session (or
 profile). Long preview lines wrap to the pane width. PgUp/PgDn also scroll the
 preview; switching sessions returns the preview to the top.
 
-The Codex preview header also shows the recorded session name, including
-default titles and names changed with `/rename`. Names are read from the local
-state database and `session_index.jsonl`, including profile-local indexes.
+The Codex and Claude preview headers also show the recorded session name,
+including default titles and names changed with `/rename`. Codex names are read
+from the local state database and `session_index.jsonl`, including profile-local
+indexes. Claude names are read from `ai-title` / `custom-title` transcript records
+and session-local `custom-title.json` files, with manual names taking precedence.
 Sessions without naming metadata omit the name row.
 
 **Delete a session** — press **Ctrl-D** on the highlighted row, then `y` to

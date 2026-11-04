@@ -3,6 +3,7 @@
 package scan
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -74,18 +75,42 @@ func scanClaude(root string, keepMissing bool) []session.Session {
 		if !ok {
 			continue
 		}
+		id := strings.TrimSuffix(filepath.Base(f), ".jsonl")
 		type line struct {
-			Type    string `json:"type"`
-			Cwd     string `json:"cwd"`
-			Message struct {
+			Type        string `json:"type"`
+			Cwd         string `json:"cwd"`
+			SessionID   string `json:"sessionId"`
+			AITitle     string `json:"aiTitle"`
+			CustomTitle string `json:"customTitle"`
+			Message     struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		}
-		var cwd, prompt string
+		var cwd, prompt, aiTitle, customTitle string
 		session.EachLine(f, func(raw []byte) bool {
+			// Naming events can be appended after the conversation. Continue
+			// streaming, but don't decode large transcript/tool rows once the
+			// initial discovery metadata is complete.
+			if cwd != "" && prompt != "" &&
+				!bytes.Contains(raw, []byte(`"ai-title"`)) &&
+				!bytes.Contains(raw, []byte(`"custom-title"`)) {
+				return true
+			}
 			var l line
 			if json.Unmarshal(raw, &l) != nil {
 				return true
+			}
+			if l.SessionID == "" || l.SessionID == id {
+				switch l.Type {
+				case "ai-title":
+					if strings.TrimSpace(l.AITitle) != "" {
+						aiTitle = l.AITitle
+					}
+				case "custom-title":
+					if strings.TrimSpace(l.CustomTitle) != "" {
+						customTitle = l.CustomTitle
+					}
+				}
 			}
 			if cwd == "" && l.Cwd != "" {
 				cwd = l.Cwd
@@ -96,7 +121,7 @@ func scanClaude(root string, keepMissing bool) []session.Session {
 					prompt = t
 				}
 			}
-			return !(cwd != "" && prompt != "")
+			return true
 		})
 		if cwd == "" {
 			cwd = session.Home()
@@ -105,10 +130,25 @@ func scanClaude(root string, keepMissing bool) []session.Session {
 			continue
 		}
 		base.Provider = "claude"
-		base.ID = strings.TrimSuffix(filepath.Base(f), ".jsonl")
+		base.ID = id
 		base.Cwd = cwd
 		base.File = f
 		base.Preview = session.CollapseWS(prompt)
+		base.Name = aiTitle
+		if customTitle != "" {
+			base.Name = customTitle
+		}
+		// Newer Claude versions also persist /rename outside the transcript.
+		// Read only the sidecar for this exact session, never a project-wide
+		// title or another session's metadata.
+		if data, err := os.ReadFile(filepath.Join(filepath.Dir(f), id, "custom-title.json")); err == nil {
+			var title struct {
+				CustomTitle string `json:"customTitle"`
+			}
+			if json.Unmarshal(data, &title) == nil && strings.TrimSpace(title.CustomTitle) != "" {
+				base.Name = title.CustomTitle
+			}
+		}
 		out = append(out, base)
 	}
 	return out
